@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func TestLoginUsesReadAudienceLoopbackAndPKCE(t *testing.T) {
+func TestLoginUsesReadPurposeLoopbackAndPKCE(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/api/v1/cli/exchange" {
 			http.NotFound(writer, request)
@@ -32,7 +32,7 @@ func TestLoginUsesReadAudienceLoopbackAndPKCE(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if authorizeURL.Query().Get("audience") != "read_api" || authorizeURL.Query().Get("code_challenge") == "" {
+		if authorizeURL.Query().Get("purpose") != "read_api" || authorizeURL.Query().Get("code_challenge") == "" {
 			t.Fatalf("unexpected authorize URL %s", address)
 		}
 		callback := "http://127.0.0.1:" + authorizeURL.Query().Get("port") + "/callback?code=one-time-code&state=" + url.QueryEscape(authorizeURL.Query().Get("state"))

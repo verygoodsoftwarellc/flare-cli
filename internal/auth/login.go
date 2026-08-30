@@ -50,7 +50,7 @@ func Login(ctx context.Context, baseURL string, open func(string) error) (*Excha
 	query.Set("state", state)
 	query.Set("port", fmt.Sprint(port))
 	query.Set("code_challenge", challenge)
-	query.Set("audience", "read_api")
+	query.Set("purpose", "read_api")
 	authorizeURL.RawQuery = query.Encode()
 
 	type callbackResult struct {
