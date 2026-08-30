@@ -33,6 +33,7 @@ type Config struct {
 
 func Load(overrideURL string) (*Config, error) {
 	config := &Config{APIURL: defaultAPIURL}
+	migratedLegacyToken := false
 	path, err := Path()
 	if err != nil {
 		return nil, err
@@ -42,11 +43,16 @@ func Load(overrideURL string) (*Config, error) {
 		if err := json.Unmarshal(data, config); err != nil {
 			return nil, fmt.Errorf("read config: %w", err)
 		}
+		if config.Token != "" && config.TokenBackend == "" {
+			config.TokenBackend = tokenBackendFile
+			migratedLegacyToken = true
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 
-	if envURL := os.Getenv("FLARE_API_URL"); envURL != "" {
+	envURL := os.Getenv("FLARE_API_URL")
+	if envURL != "" {
 		config.APIURL = envURL
 	}
 	if overrideURL != "" {
@@ -55,6 +61,11 @@ func Load(overrideURL string) (*Config, error) {
 	config.APIURL = strings.TrimRight(config.APIURL, "/")
 	if _, err := url.ParseRequestURI(config.APIURL); err != nil {
 		return nil, fmt.Errorf("invalid API URL: %w", err)
+	}
+	if migratedLegacyToken && envURL == "" && overrideURL == "" {
+		if err := config.Save(); err != nil {
+			return nil, fmt.Errorf("migrate legacy token config: %w", err)
+		}
 	}
 	return config, nil
 }
