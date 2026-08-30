@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -44,7 +45,7 @@ func TestCatalogHelpersFollowOpaqueNextCursors(t *testing.T) {
 }
 
 func TestLoginDoesNotAcceptTokenInProcessArguments(t *testing.T) {
-	root := newRootCommand()
+	root := newRootCommand("flare")
 	authCommand, _, err := root.Find([]string{"auth", "login"})
 	if err != nil {
 		t.Fatal(err)
@@ -54,6 +55,19 @@ func TestLoginDoesNotAcceptTokenInProcessArguments(t *testing.T) {
 	}
 	if authCommand.Flags().Lookup("with-token") == nil {
 		t.Fatal("login should accept tokens through stdin")
+	}
+}
+
+func TestAuthenticationErrorsUseInvokedExecutableName(t *testing.T) {
+	root := newRootCommand("flare-cli")
+	if root.Use != "flare-cli" {
+		t.Fatalf("expected invoked executable in usage, got %q", root.Use)
+	}
+
+	options := &rootOptions{name: "flare-cli"}
+	err := options.authenticationError(errors.New("not authenticated"))
+	if got := err.Error(); got != "not authenticated; run `flare-cli auth login` or set FLARE_TOKEN" {
+		t.Fatalf("unexpected authentication error %q", got)
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 )
 
 type rootOptions struct {
+	name    string
 	apiURL  string
 	json    bool
 	verbose bool
@@ -29,14 +30,14 @@ type rootOptions struct {
 	input   io.Reader
 }
 
-func Execute() error {
-	return newRootCommand().Execute()
+func Execute(name string) error {
+	return newRootCommand(name).Execute()
 }
 
-func newRootCommand() *cobra.Command {
-	options := &rootOptions{output: os.Stdout, errors: os.Stderr, input: os.Stdin}
+func newRootCommand(name string) *cobra.Command {
+	options := &rootOptions{name: name, output: os.Stdout, errors: os.Stderr, input: os.Stdin}
 	command := &cobra.Command{
-		Use:           "flare",
+		Use:           name,
 		Short:         "Inspect application performance in Flare",
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -66,12 +67,16 @@ func (options *rootOptions) client() (*api.Client, error) {
 	}
 	token, err := settings.TokenValue()
 	if err != nil {
-		return nil, err
+		return nil, options.authenticationError(err)
 	}
 	client := api.New(settings.APIURL, token)
 	client.Verbose = options.verbose
 	client.ErrWriter = options.errors
 	return client, nil
+}
+
+func (options *rootOptions) authenticationError(err error) error {
+	return fmt.Errorf("%w; run `%s auth login` or set FLARE_TOKEN", err, options.name)
 }
 
 func newAuthCommand(options *rootOptions) *cobra.Command {
@@ -128,7 +133,7 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 			}
 			token, err := settings.TokenValue()
 			if err != nil {
-				return err
+				return options.authenticationError(err)
 			}
 			client := api.New(settings.APIURL, token)
 			client.Verbose = options.verbose
