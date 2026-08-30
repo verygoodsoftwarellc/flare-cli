@@ -58,6 +58,7 @@ func TestTokenValueHonorsExplicitFileBackend(t *testing.T) {
 		APIURL:       "https://flare.test",
 		Token:        "flare_pat_current",
 		TokenBackend: tokenBackendFile,
+		TokenAPIURL:  "https://flare.test",
 	}
 	token, err := settings.TokenValue()
 	if err != nil {
@@ -116,7 +117,41 @@ func TestLoadMigratesLegacyFileTokenBeforeConsultingKeyring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), `"token_backend": "file"`) {
-		t.Fatalf("legacy backend was not persisted: %s", data)
+	if !strings.Contains(string(data), `"token_backend": "file"`) ||
+		!strings.Contains(string(data), `"token_api_url": "https://flare.test"`) {
+		t.Fatalf("legacy credential ownership was not persisted: %s", data)
+	}
+}
+
+func TestAPIURLOverrideDoesNotReuseFileCredential(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	settings := &Config{
+		APIURL:       "https://flare.am",
+		Token:        "flare_pat_production",
+		TokenBackend: tokenBackendFile,
+		TokenAPIURL:  "https://flare.am",
+	}
+	if err := settings.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	overridden, err := Load("https://other.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := overridden.TokenValue(); err == nil || !strings.Contains(err.Error(), "no stored credentials") {
+		t.Fatalf("expected host-specific credential error, got %v", err)
+	}
+}
+
+func TestAPIURLRequiresHTTPSExceptForLoopback(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, value := range []string{"https://flare.example", "http://localhost:3200", "http://127.0.0.1:3200", "http://[::1]:3200"} {
+		if _, err := Load(value); err != nil {
+			t.Errorf("expected %s to be accepted: %v", value, err)
+		}
+	}
+	if _, err := Load("http://flare.example"); err == nil {
+		t.Fatal("expected plaintext non-loopback API URL to be rejected")
 	}
 }
