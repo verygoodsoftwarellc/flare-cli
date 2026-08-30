@@ -18,6 +18,7 @@ import (
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/auth"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/config"
+	"github.com/verygoodsoftwarellc/flare-cli/internal/version"
 )
 
 type rootOptions struct {
@@ -39,6 +40,7 @@ func newRootCommand(name string) *cobra.Command {
 	command := &cobra.Command{
 		Use:           name,
 		Short:         "Inspect application performance in Flare",
+		Version:       version.Current(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
