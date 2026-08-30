@@ -56,3 +56,36 @@ func TestLoginDoesNotAcceptTokenInProcessArguments(t *testing.T) {
 		t.Fatal("login should accept tokens through stdin")
 	}
 }
+
+func TestVerifyAuthenticationChecksTokenWithServer(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     int
+		shouldFail bool
+	}{
+		{name: "valid token", status: http.StatusOK},
+		{name: "valid token without org scope", status: http.StatusForbidden},
+		{name: "invalid token", status: http.StatusUnauthorized, shouldFail: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.URL.Path != "/api/v1/organizations" || request.URL.Query().Get("limit") != "1" {
+					t.Fatalf("unexpected status request %s", request.URL.String())
+				}
+				writer.WriteHeader(test.status)
+				_, _ = writer.Write([]byte(`{}`))
+			}))
+			defer server.Close()
+
+			err := verifyAuthentication(context.Background(), api.New(server.URL, "flare_pat_test"))
+			if test.shouldFail && err == nil {
+				t.Fatal("expected authentication check to fail")
+			}
+			if !test.shouldFail && err != nil {
+				t.Fatalf("expected authentication check to pass, got %v", err)
+			}
+		})
+	}
+}

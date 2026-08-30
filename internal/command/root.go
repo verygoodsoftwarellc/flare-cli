@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"strconv"
@@ -120,13 +121,19 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 	status := &cobra.Command{
 		Use:   "status",
 		Short: "Show authentication status",
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(command *cobra.Command, _ []string) error {
 			settings, err := options.config()
 			if err != nil {
 				return err
 			}
-			_, err = settings.TokenValue()
+			token, err := settings.TokenValue()
 			if err != nil {
+				return err
+			}
+			client := api.New(settings.APIURL, token)
+			client.Verbose = options.verbose
+			client.ErrWriter = options.errors
+			if err := verifyAuthentication(command.Context(), client); err != nil {
 				return err
 			}
 			fmt.Fprintf(options.output, "Authenticated with %s\n", settings.APIURL)
@@ -150,6 +157,16 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 	}
 	command.AddCommand(login, status, logout)
 	return command
+}
+
+func verifyAuthentication(ctx context.Context, client *api.Client) error {
+	var response api.OrganizationsResponse
+	err := client.Get(ctx, "/api/v1/organizations", url.Values{"limit": {"1"}}, &response)
+	var apiError *api.APIError
+	if errors.As(err, &apiError) && apiError.Status == http.StatusForbidden {
+		return nil
+	}
+	return err
 }
 
 func newOrganizationCommand(options *rootOptions) *cobra.Command {

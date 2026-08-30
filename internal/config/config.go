@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	defaultAPIURL  = "https://flare.am"
-	keyringService = "flare-cli"
+	defaultAPIURL       = "https://flare.am"
+	keyringService      = "flare-cli"
+	tokenBackendFile    = "file"
+	tokenBackendKeyring = "keyring"
 )
 
 var (
@@ -24,8 +26,9 @@ var (
 )
 
 type Config struct {
-	APIURL string `json:"api_url"`
-	Token  string `json:"token,omitempty"`
+	APIURL       string `json:"api_url"`
+	Token        string `json:"token,omitempty"`
+	TokenBackend string `json:"token_backend,omitempty"`
 }
 
 func Load(overrideURL string) (*Config, error) {
@@ -86,11 +89,17 @@ func (config *Config) TokenValue() (string, error) {
 	if token := os.Getenv("FLARE_TOKEN"); token != "" {
 		return token, nil
 	}
+	if config.TokenBackend == tokenBackendFile {
+		if config.Token != "" {
+			return config.Token, nil
+		}
+		return "", errors.New("not authenticated; run `flare auth login`")
+	}
 	token, err := keyringGet(keyringService, config.APIURL)
 	if err == nil {
 		return token, nil
 	}
-	if config.Token != "" {
+	if config.TokenBackend == "" && config.Token != "" {
 		return config.Token, nil
 	}
 	return "", errors.New("not authenticated; run `flare auth login`")
@@ -102,15 +111,18 @@ func (config *Config) TokenValue() (string, error) {
 func (config *Config) StoreToken(token string) (fallback bool, err error) {
 	if err := keyringSet(keyringService, config.APIURL, token); err == nil {
 		config.Token = ""
+		config.TokenBackend = tokenBackendKeyring
 		return false, config.Save()
 	}
 	config.Token = token
+	config.TokenBackend = tokenBackendFile
 	return true, config.Save()
 }
 
 func (config *Config) DeleteToken() error {
 	keyringErr := keyringDelete(keyringService, config.APIURL)
 	config.Token = ""
+	config.TokenBackend = ""
 	if err := config.Save(); err != nil {
 		return err
 	}

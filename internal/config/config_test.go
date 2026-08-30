@@ -47,3 +47,38 @@ func TestDeleteTokenAllowsMissingKeyringEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestTokenValueHonorsExplicitFileBackend(t *testing.T) {
+	originalGet := keyringGet
+	keyringGet = func(_, _ string) (string, error) { return "flare_pat_stale", nil }
+	t.Cleanup(func() { keyringGet = originalGet })
+
+	settings := &Config{
+		APIURL:       "https://flare.test",
+		Token:        "flare_pat_current",
+		TokenBackend: tokenBackendFile,
+	}
+	token, err := settings.TokenValue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "flare_pat_current" {
+		t.Fatalf("expected file token, got %q", token)
+	}
+}
+
+func TestStoreTokenRecordsFileBackendWhenKeyringFails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	originalSet := keyringSet
+	keyringSet = func(_, _, _ string) error { return errors.New("unavailable") }
+	t.Cleanup(func() { keyringSet = originalSet })
+
+	settings := &Config{APIURL: "https://flare.test"}
+	fallback, err := settings.StoreToken("flare_pat_current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fallback || settings.TokenBackend != tokenBackendFile {
+		t.Fatalf("expected explicit file fallback, got %#v", settings)
+	}
+}
