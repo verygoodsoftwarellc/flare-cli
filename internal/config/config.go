@@ -17,6 +17,12 @@ const (
 	keyringService = "flare-cli"
 )
 
+var (
+	keyringGet    = keyring.Get
+	keyringSet    = keyring.Set
+	keyringDelete = keyring.Delete
+)
+
 type Config struct {
 	APIURL string `json:"api_url"`
 	Token  string `json:"token,omitempty"`
@@ -80,7 +86,7 @@ func (config *Config) TokenValue() (string, error) {
 	if token := os.Getenv("FLARE_TOKEN"); token != "" {
 		return token, nil
 	}
-	token, err := keyring.Get(keyringService, config.APIURL)
+	token, err := keyringGet(keyringService, config.APIURL)
 	if err == nil {
 		return token, nil
 	}
@@ -94,7 +100,7 @@ func (config *Config) TokenValue() (string, error) {
 // it is unavailable, it falls back to the mode-0600 config file and tells the
 // caller so it can display a warning.
 func (config *Config) StoreToken(token string) (fallback bool, err error) {
-	if err := keyring.Set(keyringService, config.APIURL, token); err == nil {
+	if err := keyringSet(keyringService, config.APIURL, token); err == nil {
 		config.Token = ""
 		return false, config.Save()
 	}
@@ -103,10 +109,13 @@ func (config *Config) StoreToken(token string) (fallback bool, err error) {
 }
 
 func (config *Config) DeleteToken() error {
-	err := keyring.Delete(keyringService, config.APIURL)
-	if err != nil && !errors.Is(err, keyring.ErrNotFound) {
-		// Continue so a file fallback is still removed.
-	}
+	keyringErr := keyringDelete(keyringService, config.APIURL)
 	config.Token = ""
-	return config.Save()
+	if err := config.Save(); err != nil {
+		return err
+	}
+	if keyringErr != nil && !errors.Is(keyringErr, keyring.ErrNotFound) {
+		return fmt.Errorf("remove token from OS credential store: %w", keyringErr)
+	}
+	return nil
 }

@@ -2,6 +2,7 @@ package command
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -34,8 +35,8 @@ type mcpError struct {
 }
 
 type toolCall struct {
-	Name      string         `json:"name"`
-	Arguments map[string]any `json:"arguments"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
 }
 
 func newMCPCommand(options *rootOptions) *cobra.Command {
@@ -90,7 +91,7 @@ func handleMCPRequest(ctx context.Context, client *api.Client, request mcpReques
 		response.Result = map[string]any{"tools": mcpTools()}
 	case "tools/call":
 		var call toolCall
-		if err := json.Unmarshal(request.Params, &call); err != nil {
+		if err := decodeStrict(request.Params, &call); err != nil {
 			response.Error = &mcpError{Code: -32602, Message: "Invalid tool arguments"}
 			return response
 		}
@@ -116,18 +117,22 @@ func handleMCPRequest(ctx context.Context, client *api.Client, request mcpReques
 func mcpTools() []map[string]any {
 	readOnly := map[string]any{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}
 	integer := map[string]any{"type": "integer"}
+	pagination := map[string]any{
+		"cursor": map[string]any{"type": "string"},
+		"limit":  map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "default": 100},
+	}
 	return []map[string]any{
 		{
 			"name": "list_organizations", "description": "List Flare organizations the user can access.",
-			"inputSchema": objectSchema(map[string]any{}, nil), "annotations": readOnly,
+			"inputSchema": objectSchema(pagination, nil), "annotations": readOnly,
 		},
 		{
 			"name": "list_projects", "description": "List accessible Flare projects, optionally filtered by organization ID.",
-			"inputSchema": objectSchema(map[string]any{"organization_id": integer}, nil), "annotations": readOnly,
+			"inputSchema": objectSchema(mergeProperties(pagination, map[string]any{"organization_id": integer}), nil), "annotations": readOnly,
 		},
 		{
 			"name": "list_environments", "description": "List accessible Flare environments, optionally filtered by project ID.",
-			"inputSchema": objectSchema(map[string]any{"project_id": integer}, nil), "annotations": readOnly,
+			"inputSchema": objectSchema(mergeProperties(pagination, map[string]any{"project_id": integer}), nil), "annotations": readOnly,
 		},
 		{
 			"name": "get_environment_overviews", "description": "Get bulk performance summaries for up to 25 Flare environments.",
@@ -161,41 +166,127 @@ func objectSchema(properties map[string]any, required []string) map[string]any {
 	return schema
 }
 
+func mergeProperties(left, right map[string]any) map[string]any {
+	result := make(map[string]any, len(left)+len(right))
+	for key, value := range left {
+		result[key] = value
+	}
+	for key, value := range right {
+		result[key] = value
+	}
+	return result
+}
+
+type catalogArguments struct {
+	Cursor         string `json:"cursor"`
+	Limit          int    `json:"limit"`
+	OrganizationID *int64 `json:"organization_id,omitempty"`
+	ProjectID      *int64 `json:"project_id,omitempty"`
+}
+
+type overviewArguments struct {
+	EnvironmentIDs []int64 `json:"environment_ids"`
+	Hours          int     `json:"hours"`
+	Sort           string  `json:"sort"`
+	Limit          int     `json:"limit"`
+}
+
+type namespaceArguments struct {
+	EnvironmentID int64  `json:"environment_id"`
+	Namespace     string `json:"namespace"`
+	Hours         int    `json:"hours"`
+	Sort          string `json:"sort"`
+	Direction     string `json:"direction"`
+	Limit         int    `json:"limit"`
+	Query         string `json:"q"`
+}
+
 func callMCPTool(ctx context.Context, client *api.Client, call toolCall) (map[string]any, error) {
-	query := url.Values{"limit": {"100"}}
+	query := url.Values{}
 	path := ""
 	switch call.Name {
 	case "list_organizations":
 		path = "/api/v1/organizations"
+		arguments := catalogArguments{}
+		if err := decodeStrictArguments(call.Arguments, &arguments); err != nil {
+			return nil, err
+		}
+		if arguments.OrganizationID != nil || arguments.ProjectID != nil {
+			return nil, fmt.Errorf("invalid organization arguments")
+		}
+		if err := addCatalogArguments(query, arguments); err != nil {
+			return nil, err
+		}
 	case "list_projects":
 		path = "/api/v1/projects"
-		addArgument(query, "organization_id", call.Arguments["organization_id"])
+		arguments := catalogArguments{}
+		if err := decodeStrictArguments(call.Arguments, &arguments); err != nil {
+			return nil, err
+		}
+		if arguments.ProjectID != nil {
+			return nil, fmt.Errorf("invalid project arguments")
+		}
+		if err := addCatalogArguments(query, arguments); err != nil {
+			return nil, err
+		}
+		if arguments.OrganizationID != nil {
+			query.Set("organization_id", strconv.FormatInt(*arguments.OrganizationID, 10))
+		}
 	case "list_environments":
 		path = "/api/v1/environments"
-		addArgument(query, "project_id", call.Arguments["project_id"])
+		arguments := catalogArguments{}
+		if err := decodeStrictArguments(call.Arguments, &arguments); err != nil {
+			return nil, err
+		}
+		if arguments.OrganizationID != nil {
+			return nil, fmt.Errorf("invalid environment arguments")
+		}
+		if err := addCatalogArguments(query, arguments); err != nil {
+			return nil, err
+		}
+		if arguments.ProjectID != nil {
+			query.Set("project_id", strconv.FormatInt(*arguments.ProjectID, 10))
+		}
 	case "get_environment_overviews":
 		path = "/api/v1/overviews"
-		ids, ok := call.Arguments["environment_ids"].([]any)
-		if !ok || len(ids) == 0 {
+		arguments := overviewArguments{Hours: 24, Sort: "sum", Limit: 5}
+		if err := decodeStrictArguments(call.Arguments, &arguments); err != nil {
+			return nil, err
+		}
+		if len(arguments.EnvironmentIDs) == 0 || len(arguments.EnvironmentIDs) > 25 {
 			return nil, fmt.Errorf("environment_ids is required")
 		}
-		values := make([]string, len(ids))
-		for index, id := range ids {
-			values[index] = numberString(id)
+		if !validHours(arguments.Hours) || !validSort(arguments.Sort) || arguments.Limit < 1 || arguments.Limit > 25 {
+			return nil, fmt.Errorf("invalid overview arguments")
+		}
+		values := make([]string, len(arguments.EnvironmentIDs))
+		for index, id := range arguments.EnvironmentIDs {
+			values[index] = strconv.FormatInt(id, 10)
 		}
 		query.Set("environment_ids", strings.Join(values, ","))
-		addDefaultArgument(query, "hours", call.Arguments["hours"], "24")
-		addDefaultArgument(query, "sort", call.Arguments["sort"], "sum")
-		addDefaultArgument(query, "limit", call.Arguments["limit"], "5")
+		query.Set("hours", strconv.Itoa(arguments.Hours))
+		query.Set("sort", arguments.Sort)
+		query.Set("limit", strconv.Itoa(arguments.Limit))
 	case "list_namespace_operations":
 		path = "/api/v1/namespaces"
-		addArgument(query, "environment_id", call.Arguments["environment_id"])
-		addArgument(query, "namespace", call.Arguments["namespace"])
-		addDefaultArgument(query, "hours", call.Arguments["hours"], "24")
-		addDefaultArgument(query, "sort", call.Arguments["sort"], "sum")
-		addDefaultArgument(query, "direction", call.Arguments["direction"], "desc")
-		addDefaultArgument(query, "limit", call.Arguments["limit"], "25")
-		addArgument(query, "q", call.Arguments["q"])
+		arguments := namespaceArguments{Hours: 24, Sort: "sum", Direction: "desc", Limit: 25}
+		if err := decodeStrictArguments(call.Arguments, &arguments); err != nil {
+			return nil, err
+		}
+		if arguments.EnvironmentID <= 0 || !validNamespace(arguments.Namespace) || !validHours(arguments.Hours) ||
+			!validSort(arguments.Sort) || (arguments.Direction != "asc" && arguments.Direction != "desc") ||
+			arguments.Limit < 1 || arguments.Limit > 100 || len(arguments.Query) > 255 {
+			return nil, fmt.Errorf("invalid namespace arguments")
+		}
+		query.Set("environment_id", strconv.FormatInt(arguments.EnvironmentID, 10))
+		query.Set("namespace", arguments.Namespace)
+		query.Set("hours", strconv.Itoa(arguments.Hours))
+		query.Set("sort", arguments.Sort)
+		query.Set("direction", arguments.Direction)
+		query.Set("limit", strconv.Itoa(arguments.Limit))
+		if arguments.Query != "" {
+			query.Set("q", arguments.Query)
+		}
 	default:
 		return nil, fmt.Errorf("unknown tool %q", call.Name)
 	}
@@ -207,27 +298,44 @@ func callMCPTool(ctx context.Context, client *api.Client, call toolCall) (map[st
 	return result, nil
 }
 
-func addArgument(query url.Values, key string, value any) {
-	if value != nil {
-		query.Set(key, numberString(value))
+func addCatalogArguments(query url.Values, arguments catalogArguments) error {
+	if arguments.Limit == 0 {
+		arguments.Limit = 100
 	}
+	if arguments.Limit < 1 || arguments.Limit > 100 {
+		return fmt.Errorf("limit must be between 1 and 100")
+	}
+	query.Set("limit", strconv.Itoa(arguments.Limit))
+	if arguments.Cursor != "" {
+		query.Set("cursor", arguments.Cursor)
+	}
+	return nil
 }
 
-func addDefaultArgument(query url.Values, key string, value any, fallback string) {
-	if value == nil {
-		query.Set(key, fallback)
-		return
+func decodeStrictArguments(raw json.RawMessage, output any) error {
+	if len(raw) == 0 {
+		raw = json.RawMessage(`{}`)
 	}
-	query.Set(key, numberString(value))
+	return decodeStrict(raw, output)
 }
 
-func numberString(value any) string {
-	switch typed := value.(type) {
-	case float64:
-		return strconv.FormatInt(int64(typed), 10)
-	case json.Number:
-		return typed.String()
-	default:
-		return fmt.Sprint(value)
+func decodeStrict(raw []byte, output any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(output); err != nil {
+		return fmt.Errorf("invalid arguments: %w", err)
 	}
+	return nil
+}
+
+func validHours(hours int) bool {
+	return hours == 1 || hours == 6 || hours == 24 || hours == 48 || hours == 168 || hours == 672
+}
+
+func validSort(sort string) bool {
+	return sort == "count" || sort == "sum" || sort == "avg" || sort == "error_rate" || sort == "impact"
+}
+
+func validNamespace(namespace string) bool {
+	return namespace == "web" || namespace == "job" || namespace == "db" || namespace == "http" || namespace == "cache" || namespace == "view"
 }

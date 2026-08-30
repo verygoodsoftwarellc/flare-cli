@@ -47,3 +47,25 @@ func TestMCPListsAndCallsCuratedReadTools(t *testing.T) {
 		t.Fatalf("unexpected result %#v", structured)
 	}
 }
+
+func TestMCPRejectsFractionalAndUnknownArguments(t *testing.T) {
+	client := api.New("http://127.0.0.1:1", "flare_pat_test")
+	for _, arguments := range []string{
+		`{"environment_id":12.9,"namespace":"web"}`,
+		`{"environment_id":12,"namespace":"web","unexpected":true}`,
+	} {
+		input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_namespace_operations","arguments":` + arguments + `}}` + "\n")
+		var output bytes.Buffer
+		if err := serveMCP(context.Background(), client, input, &output); err != nil {
+			t.Fatal(err)
+		}
+		var response map[string]any
+		if err := json.NewDecoder(&output).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		result := response["result"].(map[string]any)
+		if result["isError"] != true {
+			t.Fatalf("expected tool error for %s, got %#v", arguments, response)
+		}
+	}
+}

@@ -25,6 +25,7 @@ type rootOptions struct {
 	verbose bool
 	output  io.Writer
 	errors  io.Writer
+	input   io.Reader
 }
 
 func Execute() error {
@@ -32,7 +33,7 @@ func Execute() error {
 }
 
 func newRootCommand() *cobra.Command {
-	options := &rootOptions{output: os.Stdout, errors: os.Stderr}
+	options := &rootOptions{output: os.Stdout, errors: os.Stderr, input: os.Stdin}
 	command := &cobra.Command{
 		Use:           "flare",
 		Short:         "Inspect application performance in Flare",
@@ -74,7 +75,7 @@ func (options *rootOptions) client() (*api.Client, error) {
 
 func newAuthCommand(options *rootOptions) *cobra.Command {
 	command := &cobra.Command{Use: "auth", Short: "Manage authentication"}
-	var suppliedToken string
+	var withToken bool
 	login := &cobra.Command{
 		Use:   "login",
 		Short: "Authenticate in your browser",
@@ -83,8 +84,17 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			token := suppliedToken
-			if token == "" {
+			token := ""
+			if withToken {
+				value, err := io.ReadAll(io.LimitReader(options.input, 1024))
+				if err != nil {
+					return fmt.Errorf("read token from stdin: %w", err)
+				}
+				token = strings.TrimSpace(string(value))
+				if !strings.HasPrefix(token, "flare_pat_") {
+					return errors.New("stdin did not contain a Flare personal access token")
+				}
+			} else {
 				ctx, cancel := context.WithTimeout(command.Context(), 3*time.Minute)
 				defer cancel()
 				fmt.Fprintln(options.errors, "Opening Flare in your browser…")
@@ -106,7 +116,7 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 			return nil
 		},
 	}
-	login.Flags().StringVar(&suppliedToken, "token", "", "save an existing personal access token")
+	login.Flags().BoolVar(&withToken, "with-token", false, "read a personal access token from stdin")
 	status := &cobra.Command{
 		Use:   "status",
 		Short: "Show authentication status",
@@ -152,8 +162,8 @@ func newOrganizationCommand(options *rootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			var response api.OrganizationsResponse
-			if err := client.Get(command.Context(), "/api/v1/organizations", url.Values{"limit": {"100"}}, &response); err != nil {
+			response, err := allOrganizations(command.Context(), client)
+			if err != nil {
 				return err
 			}
 			if options.json {
@@ -178,8 +188,8 @@ func newProjectCommand(options *rootOptions) *cobra.Command {
 			}
 			query := url.Values{"limit": {"100"}}
 			api.AddInt(query, "organization_id", organizationID)
-			var response api.ProjectsResponse
-			if err := client.Get(command.Context(), "/api/v1/projects", query, &response); err != nil {
+			response, err := allProjects(command.Context(), client, query)
+			if err != nil {
 				return err
 			}
 			if options.json {
@@ -210,8 +220,8 @@ func newEnvironmentCommand(options *rootOptions) *cobra.Command {
 			}
 			query := url.Values{"limit": {"100"}}
 			api.AddInt(query, "project_id", projectID)
-			var response api.EnvironmentsResponse
-			if err := client.Get(command.Context(), "/api/v1/environments", query, &response); err != nil {
+			response, err := allEnvironments(command.Context(), client, query)
+			if err != nil {
 				return err
 			}
 			if options.json {
@@ -352,6 +362,55 @@ func organizationRows(organizations []api.Organization) [][]string {
 		rows = append(rows, []string{fmt.Sprint(organization.ID), organization.Name})
 	}
 	return rows
+}
+
+func allOrganizations(ctx context.Context, client *api.Client) (api.OrganizationsResponse, error) {
+	response := api.OrganizationsResponse{}
+	query := url.Values{"limit": {"100"}}
+	for {
+		var page api.OrganizationsResponse
+		if err := client.Get(ctx, "/api/v1/organizations", query, &page); err != nil {
+			return response, err
+		}
+		response.Organizations = append(response.Organizations, page.Organizations...)
+		if page.Pagination.Next == nil {
+			break
+		}
+		query.Set("cursor", *page.Pagination.Next)
+	}
+	return response, nil
+}
+
+func allProjects(ctx context.Context, client *api.Client, query url.Values) (api.ProjectsResponse, error) {
+	response := api.ProjectsResponse{}
+	for {
+		var page api.ProjectsResponse
+		if err := client.Get(ctx, "/api/v1/projects", query, &page); err != nil {
+			return response, err
+		}
+		response.Projects = append(response.Projects, page.Projects...)
+		if page.Pagination.Next == nil {
+			break
+		}
+		query.Set("cursor", *page.Pagination.Next)
+	}
+	return response, nil
+}
+
+func allEnvironments(ctx context.Context, client *api.Client, query url.Values) (api.EnvironmentsResponse, error) {
+	response := api.EnvironmentsResponse{}
+	for {
+		var page api.EnvironmentsResponse
+		if err := client.Get(ctx, "/api/v1/environments", query, &page); err != nil {
+			return response, err
+		}
+		response.Environments = append(response.Environments, page.Environments...)
+		if page.Pagination.Next == nil {
+			break
+		}
+		query.Set("cursor", *page.Pagination.Next)
+	}
+	return response, nil
 }
 
 func formatMilliseconds(milliseconds int64) string {
