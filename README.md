@@ -47,13 +47,34 @@ Add `--json` to any data command for stable machine-readable output.
 
 ## MCP
 
-The same binary includes a read-only MCP server over stdio:
+Authenticate once, then configure every supported MCP client installed on your machine:
+
+```sh
+flare-cli auth login
+flare-cli mcp install
+```
+
+The installer currently supports Codex and Claude Code. It uses the absolute path to `flare-cli`, is safe to run again, and never copies your personal access token into another application's configuration. To target one client, preview changes, or intentionally replace an existing `flare` server:
+
+```sh
+flare-cli mcp install --client codex
+flare-cli mcp install --dry-run
+flare-cli mcp install --client claude --force
+```
+
+For another MCP client, print a generic configuration containing the resolved executable path:
+
+```sh
+flare-cli mcp config
+```
+
+It has this shape:
 
 ```json
 {
   "mcpServers": {
     "flare": {
-      "command": "flare-cli",
+      "command": "/absolute/path/to/flare-cli",
       "args": ["mcp"]
     }
   }

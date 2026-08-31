@@ -49,9 +49,10 @@ type namespaceInput struct {
 }
 
 func newMCPCommand(options *rootOptions) *cobra.Command {
-	return &cobra.Command{
+	command := &cobra.Command{
 		Use:   "mcp",
 		Short: "Run a read-only MCP server over stdio",
+		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			client, err := options.client()
 			if err != nil {
@@ -60,6 +61,8 @@ func newMCPCommand(options *rootOptions) *cobra.Command {
 			return newMCPServer(client).Run(command.Context(), &mcp.StdioTransport{})
 		},
 	}
+	command.AddCommand(newMCPInstallCommand(options), newMCPConfigCommand(options))
+	return command
 }
 
 func newMCPServer(client *api.Client) *mcp.Server {
