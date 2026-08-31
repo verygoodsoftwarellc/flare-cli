@@ -1,6 +1,7 @@
 package command
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -28,8 +30,34 @@ type mcpClientConfig struct {
 	Args    []string `json:"args"`
 }
 
+type codexMCPTransport struct {
+	mcpClientConfig
+	Type    string            `json:"type"`
+	Env     map[string]string `json:"env"`
+	EnvVars []string          `json:"env_vars"`
+	Cwd     *string           `json:"cwd"`
+}
+
 type codexMCPConfig struct {
-	Transport mcpClientConfig `json:"transport"`
+	Enabled   bool              `json:"enabled"`
+	Transport codexMCPTransport `json:"transport"`
+}
+
+type claudeMCPEntry struct {
+	Type    string            `json:"type"`
+	Command string            `json:"command"`
+	Args    []string          `json:"args"`
+	Env     map[string]string `json:"env"`
+}
+
+type claudeUserConfig struct {
+	MCPServers map[string]claudeMCPEntry `json:"mcpServers"`
+}
+
+type fileBackup struct {
+	path string
+	data []byte
+	mode os.FileMode
 }
 
 func newMCPInstaller(output io.Writer) *mcpInstaller {
@@ -37,7 +65,12 @@ func newMCPInstaller(output io.Writer) *mcpInstaller {
 		lookPath: exec.LookPath,
 		run: func(ctx context.Context, name string, args ...string) (string, error) {
 			command := exec.CommandContext(ctx, name, args...)
-			result, err := command.CombinedOutput()
+			var stderr bytes.Buffer
+			command.Stderr = &stderr
+			result, err := command.Output()
+			if err != nil && stderr.Len() > 0 {
+				return strings.TrimSpace(string(result) + "\n" + stderr.String()), err
+			}
 			return strings.TrimSpace(string(result)), err
 		},
 		output: output,
@@ -101,15 +134,11 @@ func (installer *mcpInstaller) install(ctx context.Context, requested []string, 
 		return err
 	}
 	for _, client := range clients {
-		if dryRun {
-			fmt.Fprintf(installer.output, "Would configure %s to run %s mcp\n", client, executable)
-			continue
-		}
 		switch client {
 		case "codex":
-			err = installer.installCodex(ctx, executable, force)
+			err = installer.installCodex(ctx, executable, force, dryRun)
 		case "claude":
-			err = installer.installClaude(ctx, executable, force)
+			err = installer.installClaude(ctx, executable, force, dryRun)
 		}
 		if err != nil {
 			return err
@@ -148,19 +177,34 @@ func (installer *mcpInstaller) resolveClients(requested []string) ([]string, err
 	return clients, nil
 }
 
-func (installer *mcpInstaller) installCodex(ctx context.Context, executable string, force bool) error {
+func (installer *mcpInstaller) installCodex(ctx context.Context, executable string, force, dryRun bool) error {
 	output, err := installer.run(ctx, "codex", "mcp", "get", mcpServerName, "--json")
 	if err == nil {
 		var current codexMCPConfig
-		if json.Unmarshal([]byte(output), &current) == nil && sameMCPConfig(current.Transport, executable) {
+		if unmarshalErr := json.Unmarshal([]byte(output), &current); unmarshalErr != nil {
+			return fmt.Errorf("inspect Codex MCP configuration: decode response: %w", unmarshalErr)
+		}
+		matching := sameCodexConfig(current, executable)
+		if matching && current.Enabled {
 			fmt.Fprintln(installer.output, "Codex is already configured for Flare")
 			return nil
 		}
-		if !force {
+		if !matching && !force {
 			return errors.New("Codex already has a different Flare MCP configuration; rerun with --force to replace it")
+		}
+		if dryRun {
+			if matching {
+				fmt.Fprintln(installer.output, "Would enable Flare for Codex")
+			} else {
+				fmt.Fprintf(installer.output, "Would replace Codex Flare configuration with %s mcp\n", executable)
+			}
+			return nil
 		}
 	} else if !mcpConfigMissing(output) {
 		return fmt.Errorf("inspect Codex MCP configuration: %s", commandFailure(output, err))
+	} else if dryRun {
+		fmt.Fprintf(installer.output, "Would configure Codex to run %s mcp\n", executable)
+		return nil
 	}
 	output, err = installer.run(ctx, "codex", "mcp", "add", mcpServerName, "--", executable, "mcp")
 	if err != nil {
@@ -170,25 +214,38 @@ func (installer *mcpInstaller) installCodex(ctx context.Context, executable stri
 	return nil
 }
 
-func (installer *mcpInstaller) installClaude(ctx context.Context, executable string, force bool) error {
-	output, err := installer.run(ctx, "claude", "mcp", "get", mcpServerName)
-	if err == nil {
-		if sameClaudeConfig(output, executable) {
+func (installer *mcpInstaller) installClaude(ctx context.Context, executable string, force, dryRun bool) error {
+	current, found, backup, err := readClaudeUserConfig()
+	if err != nil {
+		return fmt.Errorf("inspect Claude Code MCP configuration: %w", err)
+	}
+	if found {
+		if sameClaudeConfig(current, executable) {
 			fmt.Fprintln(installer.output, "Claude Code is already configured for Flare")
 			return nil
 		}
 		if !force {
 			return errors.New("Claude Code already has a different Flare MCP configuration; rerun with --force to replace it")
 		}
+		if dryRun {
+			fmt.Fprintf(installer.output, "Would replace Claude Code Flare configuration with %s mcp\n", executable)
+			return nil
+		}
 		removeOutput, removeErr := installer.run(ctx, "claude", "mcp", "remove", mcpServerName, "-s", "user")
 		if removeErr != nil {
 			return fmt.Errorf("remove existing Claude Code MCP configuration: %s", commandFailure(removeOutput, removeErr))
 		}
-	} else if !mcpConfigMissing(output) {
-		return fmt.Errorf("inspect Claude Code MCP configuration: %s", commandFailure(output, err))
+	} else if dryRun {
+		fmt.Fprintf(installer.output, "Would configure Claude Code to run %s mcp\n", executable)
+		return nil
 	}
-	output, err = installer.run(ctx, "claude", "mcp", "add", "-s", "user", mcpServerName, "--", executable, "mcp")
+	output, err := installer.run(ctx, "claude", "mcp", "add", "-s", "user", mcpServerName, "--", executable, "mcp")
 	if err != nil {
+		if backup != nil {
+			if restoreErr := backup.restore(); restoreErr != nil {
+				return fmt.Errorf("configure Claude Code: %s; restoring previous configuration also failed: %v", commandFailure(output, err), restoreErr)
+			}
+		}
 		return fmt.Errorf("configure Claude Code: %s", commandFailure(output, err))
 	}
 	fmt.Fprintln(installer.output, "Configured Flare for Claude Code")
@@ -213,21 +270,80 @@ func sameMCPConfig(config mcpClientConfig, executable string) bool {
 	return config.Command == executable && len(config.Args) == 1 && config.Args[0] == "mcp"
 }
 
-func sameClaudeConfig(output, executable string) bool {
-	var command, args string
-	for _, line := range strings.Split(output, "\n") {
-		key, value, found := strings.Cut(strings.TrimSpace(line), ":")
-		if !found {
-			continue
+func sameCodexConfig(config codexMCPConfig, executable string) bool {
+	return config.Transport.Type == "stdio" &&
+		sameMCPConfig(config.Transport.mcpClientConfig, executable) &&
+		len(config.Transport.Env) == 0 && len(config.Transport.EnvVars) == 0 && config.Transport.Cwd == nil
+}
+
+func sameClaudeConfig(config claudeMCPEntry, executable string) bool {
+	return config.Type == "stdio" &&
+		sameMCPConfig(mcpClientConfig{Command: config.Command, Args: config.Args}, executable) &&
+		len(config.Env) == 0
+}
+
+func readClaudeUserConfig() (claudeMCPEntry, bool, *fileBackup, error) {
+	directory := os.Getenv("CLAUDE_CONFIG_DIR")
+	if directory == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return claudeMCPEntry{}, false, nil, err
 		}
-		switch strings.ToLower(strings.TrimSpace(key)) {
-		case "command":
-			command = strings.TrimSpace(value)
-		case "args":
-			args = strings.TrimSpace(value)
-		}
+		directory = home
 	}
-	return command == executable && args == "mcp"
+	path := filepath.Join(directory, ".claude.json")
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return claudeMCPEntry{}, false, nil, nil
+	}
+	if err != nil {
+		return claudeMCPEntry{}, false, nil, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return claudeMCPEntry{}, false, nil, err
+	}
+	backupPath := path
+	if resolved, resolveErr := filepath.EvalSymlinks(path); resolveErr == nil {
+		backupPath = resolved
+	}
+	var config claudeUserConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return claudeMCPEntry{}, false, nil, err
+	}
+	entry, found := config.MCPServers[mcpServerName]
+	return entry, found, &fileBackup{path: backupPath, data: data, mode: info.Mode()}, nil
+}
+
+func (backup *fileBackup) restore() error {
+	directory := filepath.Dir(backup.path)
+	temporary, err := os.CreateTemp(directory, ".flare-claude-restore-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(backup.mode.Perm()); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(backup.data); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, backup.path); err == nil {
+		return nil
+	} else if runtime.GOOS != "windows" {
+		return err
+	}
+	return os.WriteFile(backup.path, backup.data, backup.mode.Perm())
 }
 
 func mcpConfigMissing(output string) bool {
