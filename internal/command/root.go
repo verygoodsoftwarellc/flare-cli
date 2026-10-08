@@ -258,7 +258,7 @@ func newEnvironmentCommand(options *rootOptions) *cobra.Command {
 
 func newMetricsCommand(options *rootOptions) *cobra.Command {
 	parent := &cobra.Command{Use: "metrics", Short: "Inspect performance metrics"}
-	parent.AddCommand(newOverviewCommand(options), newNamespaceCommand(options), newSeriesCommand(options))
+	parent.AddCommand(newOverviewCommand(options), newNamespaceCommand(options), newNamespaceOverviewCommand(options), newSeriesCommand(options))
 	return parent
 }
 
@@ -358,16 +358,80 @@ func newNamespaceCommand(options *rootOptions) *cobra.Command {
 	return command
 }
 
+func newNamespaceOverviewCommand(options *rootOptions) *cobra.Command {
+	var environmentID int64
+	var hours, limit int
+	var namespace string
+	command := &cobra.Command{
+		Use:   "namespace-overview",
+		Short: "Namespace stats, series, and top operations with series",
+		Long: "Mirror of the Flare namespace page: stats and a time series for the namespace plus the top " +
+			"operations by sum and by count, each with its own series. Windows of 1 or 6 hours use minute " +
+			"buckets, 24 to 168 hours use hour buckets, and 672 hours uses day buckets. The table output shows " +
+			"the rankings; use --json for the bucket-aligned series arrays.",
+		RunE: func(command *cobra.Command, _ []string) error {
+			if environmentID == 0 || namespace == "" {
+				return errors.New("--environment and --namespace are required")
+			}
+			client, err := options.client()
+			if err != nil {
+				return err
+			}
+			query := url.Values{
+				"environment_id": {strconv.FormatInt(environmentID, 10)}, "namespace": {namespace},
+				"hours": {strconv.Itoa(hours)}, "limit": {strconv.Itoa(limit)},
+			}
+			var response api.NamespaceOverviewResponse
+			if err := client.Get(command.Context(), "/api/v1/namespaces/overview", query, &response); err != nil {
+				return err
+			}
+			if options.json {
+				return writeJSON(options.output, response)
+			}
+			fmt.Fprintf(options.output, "%s %s: %d requests, %s total, %s avg, %.2f%% errors, %.1f%% of environment time (%d %s buckets, data through %s)\n\n",
+				response.Environment.Name, response.Namespace, response.Stats.Count, formatMilliseconds(response.Stats.Sum),
+				formatMilliseconds(int64(response.Stats.Avg)), response.Stats.ErrorRate, response.Stats.Impact,
+				len(response.Buckets), response.Bucket, dataThrough(response.DataThrough))
+			fmt.Fprintln(options.output, "Top by sum")
+			if err := writeTable(options.output, []string{"OPERATION", "COUNT", "SUM", "AVG", "ERROR", "IMPACT"}, rankedRows(response.TopBySum)); err != nil {
+				return err
+			}
+			fmt.Fprintln(options.output, "\nTop by count")
+			return writeTable(options.output, []string{"OPERATION", "COUNT", "SUM", "AVG", "ERROR", "IMPACT"}, rankedRows(response.TopByCount))
+		},
+	}
+	command.Flags().Int64VarP(&environmentID, "environment", "e", 0, "environment ID")
+	command.Flags().StringVarP(&namespace, "namespace", "n", "", "web, job, db, http, cache, or view")
+	command.Flags().IntVar(&hours, "hours", 24, "time window: 1, 6, 24, 48, 168, or 672")
+	command.Flags().IntVar(&limit, "limit", 10, "top operations per ranking (1-25)")
+	return command
+}
+
+func rankedRows(operations []api.RankedOperation) [][]string {
+	rows := make([][]string, 0, len(operations))
+	for _, operation := range operations {
+		rows = append(rows, []string{operation.Operation, fmt.Sprint(operation.Count), formatMilliseconds(operation.Sum), formatMilliseconds(int64(operation.Avg)), fmt.Sprintf("%.2f%%", operation.ErrorRate), fmt.Sprintf("%.1f%%", operation.Impact)})
+	}
+	return rows
+}
+
+func dataThrough(value *string) string {
+	if value == nil {
+		return "no data"
+	}
+	return *value
+}
+
 func newSeriesCommand(options *rootOptions) *cobra.Command {
 	var environmentID int64
 	var hours int
 	var namespace, service, target, operation string
 	command := &cobra.Command{
 		Use:   "series",
-		Short: "Show a time series for a namespace or one operation",
-		Long: "Show count, sum, avg, and error rate per bucket. Windows of 1 or 6 hours use minute buckets, " +
-			"24 to 168 hours use hour buckets, and 672 hours uses day buckets. Narrow to one operation with the " +
-			"selector fields shown by `flare metrics namespace --json`.",
+		Short: "Time series for a namespace or one operation",
+		Long: "Mirror of the Flare operation page: stats and one row per bucket (count, sum, avg, error rate). " +
+			"Windows of 1 or 6 hours use minute buckets, 24 to 168 hours use hour buckets, and 672 hours uses " +
+			"day buckets. Narrow to one operation with the selector fields shown by `flare metrics namespace --json`.",
 		RunE: func(command *cobra.Command, _ []string) error {
 			if environmentID == 0 || namespace == "" {
 				return errors.New("--environment and --namespace are required")
@@ -381,27 +445,48 @@ func newSeriesCommand(options *rootOptions) *cobra.Command {
 				"hours": {strconv.Itoa(hours)},
 			}
 			addSelector(query, service, target, operation)
-			var response api.SeriesResponse
+			var response api.OperationSeriesResponse
 			if err := client.Get(command.Context(), "/api/v1/series", query, &response); err != nil {
 				return err
 			}
 			if options.json {
 				return writeJSON(options.output, response)
 			}
-			rows := make([][]string, 0, len(response.Series))
-			for _, point := range response.Series {
-				rows = append(rows, []string{point.T, fmt.Sprint(point.Count), formatMilliseconds(point.Sum), formatMilliseconds(int64(point.Avg)), fmt.Sprintf("%.2f%%", point.ErrorRate)})
-			}
-			return writeTable(options.output, []string{"TIME", "COUNT", "SUM", "AVG", "ERROR"}, rows)
+			return writeTable(options.output, []string{"TIME", "COUNT", "SUM", "AVG", "ERROR"}, seriesRows(response.Buckets, response.Series))
 		},
 	}
 	command.Flags().Int64VarP(&environmentID, "environment", "e", 0, "environment ID")
 	command.Flags().StringVarP(&namespace, "namespace", "n", "", "web, job, db, http, cache, or view")
-	command.Flags().IntVar(&hours, "hours", 1, "time window: 1, 6, 24, 48, 168, or 672")
+	command.Flags().IntVar(&hours, "hours", 24, "time window: 1, 6, 24, 48, 168, or 672")
 	command.Flags().StringVar(&service, "service", "", "filter to one service (e.g. rails, solid_queue, a host)")
 	command.Flags().StringVar(&target, "target", "", "filter to one target (e.g. UsersController#index, EventJob)")
 	command.Flags().StringVar(&operation, "operation", "", "filter to one operation (status class such as 2xx for web/http)")
 	return command
+}
+
+// seriesRows renders bucket-aligned arrays one bucket per row, deriving avg
+// and error rate the same way the server does for window totals.
+func seriesRows(buckets []string, series api.Series) [][]string {
+	rows := make([][]string, 0, len(buckets))
+	for index, bucket := range buckets {
+		var count, sum, errorCount int64
+		if index < len(series.Count) {
+			count = series.Count[index]
+		}
+		if index < len(series.Sum) {
+			sum = series.Sum[index]
+		}
+		if index < len(series.ErrorCount) {
+			errorCount = series.ErrorCount[index]
+		}
+		avg, errorRate := int64(0), 0.0
+		if count > 0 {
+			avg = sum / count
+			errorRate = float64(errorCount) / float64(count) * 100
+		}
+		rows = append(rows, []string{bucket, fmt.Sprint(count), formatMilliseconds(sum), formatMilliseconds(avg), fmt.Sprintf("%.2f%%", errorRate)})
+	}
+	return rows
 }
 
 func addSelector(query url.Values, service, target, operation string) {

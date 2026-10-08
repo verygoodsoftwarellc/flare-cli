@@ -60,26 +60,57 @@ type Overview struct {
 	Namespaces  []Namespace `json:"namespaces"`
 }
 
-type SeriesPoint struct {
-	T          string  `json:"t"`
+// Stats are totals over a window: sum and avg in milliseconds, error_rate a percentage.
+type Stats struct {
 	Count      int64   `json:"count"`
 	Sum        int64   `json:"sum"`
 	Avg        float64 `json:"avg"`
 	ErrorCount int64   `json:"error_count"`
 	ErrorRate  float64 `json:"error_rate"`
+	Impact     float64 `json:"impact,omitempty"`
 }
 
-type SeriesResponse struct {
-	Environment Environment   `json:"environment"`
-	Namespace   string        `json:"namespace"`
-	Selector    Selector      `json:"selector"`
-	Hours       int           `json:"hours"`
-	Bucket      string        `json:"bucket"`
-	AsOf        string        `json:"as_of"`
-	WindowStart string        `json:"window_start"`
-	WindowEnd   string        `json:"window_end"`
-	DataThrough *string       `json:"data_through"`
-	Series      []SeriesPoint `json:"series"`
+// Series holds one value per entry of the response's Buckets, zero-filled.
+// Per-bucket avg is Sum[i]/Count[i]; per-bucket error rate is ErrorCount[i]/Count[i].
+type Series struct {
+	Count      []int64 `json:"count"`
+	Sum        []int64 `json:"sum"`
+	ErrorCount []int64 `json:"error_count"`
+}
+
+// SeriesEnvelope is shared by every series-shaped response. Bucket is minute
+// (1h/6h), hour (24h-168h), or day (672h). Buckets lists the bucket start times
+// every Series in the response is aligned to.
+type SeriesEnvelope struct {
+	Environment Environment `json:"environment"`
+	Namespace   string      `json:"namespace"`
+	Hours       int         `json:"hours"`
+	Bucket      string      `json:"bucket"`
+	AsOf        string      `json:"as_of"`
+	WindowStart string      `json:"window_start"`
+	WindowEnd   string      `json:"window_end"`
+	Buckets     []string    `json:"buckets"`
+	DataThrough *string     `json:"data_through"`
+	Stats       Stats       `json:"stats"`
+	Series      Series      `json:"series"`
+}
+
+type OperationSeriesResponse struct {
+	SeriesEnvelope
+	Selector Selector `json:"selector"`
+}
+
+type RankedOperation struct {
+	Operation string    `json:"operation"`
+	Selector  *Selector `json:"selector,omitempty"`
+	Stats
+	Series Series `json:"series"`
+}
+
+type NamespaceOverviewResponse struct {
+	SeriesEnvelope
+	TopBySum   []RankedOperation `json:"top_by_sum"`
+	TopByCount []RankedOperation `json:"top_by_count"`
 }
 
 type OrganizationsResponse struct {

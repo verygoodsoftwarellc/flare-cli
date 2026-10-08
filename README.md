@@ -27,10 +27,13 @@ flare project list --org 123
 flare environment list --project 456
 flare metrics overview --environment 789 --hours 24
 flare metrics namespace --environment 789 --namespace web --sort sum
+flare metrics namespace-overview --environment 789 --namespace job --hours 1
 flare metrics series --environment 789 --namespace job --target EventJob --hours 1
 ```
 
-`metrics series` prints one row per bucket: minutes for 1h and 6h windows, hours for 24h to 168h, days for 672h. Narrow it to one operation with `--service`, `--target`, and `--operation`, using the `selector` values from `flare metrics namespace --json`.
+The metrics commands mirror the Flare web pages. `overview` is the environment page (per-namespace stats and top operations). `namespace-overview` is the namespace page: stats, a time series, and the top operations by sum and by count, each with its own series. `namespace` is the paginated operations table. `series` is the operation page: stats and one row per bucket for one operation, selected with `--service`, `--target`, and `--operation` from the `selector` values in `namespace --json`.
+
+Series use minute buckets for 1h and 6h windows, hour buckets for 24h to 168h, and day buckets for 672h. In JSON every series is `{count, sum, error_count}` arrays aligned to the response's `buckets` list; per-bucket averages are `sum / count`.
 
 Add `--json` to any data command for stable machine-readable output.
 
@@ -49,4 +52,4 @@ The same binary includes a read-only MCP server over stdio:
 }
 ```
 
-It exposes only the six curated read tools corresponding to the CLI commands (including `get_metric_series` for per-minute, per-hour, or per-day series). It does not expose an arbitrary metrics query or any write operation.
+It exposes only the seven curated read tools corresponding to the CLI commands: the three catalog tools plus `get_environment_overviews`, `get_namespace_overview`, `list_namespace_operations`, and `get_operation_series`. It does not expose an arbitrary metrics query or any write operation.

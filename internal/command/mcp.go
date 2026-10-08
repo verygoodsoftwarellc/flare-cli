@@ -144,7 +144,7 @@ func mcpTools() []map[string]any {
 			}, []string{"environment_ids"}), "annotations": readOnly,
 		},
 		{
-			"name": "list_namespace_operations", "description": "List top operations for one Flare environment namespace. Each operation includes a selector (service/target/operation) that can be passed to get_metric_series.",
+			"name": "list_namespace_operations", "description": "Paginated, searchable, sortable operations table for one Flare environment namespace (aggregates only, no series). Each operation includes a selector (service/target/operation) that can be passed to get_operation_series.",
 			"inputSchema": objectSchema(map[string]any{
 				"environment_id": integer,
 				"namespace":      map[string]any{"type": "string", "enum": []string{"web", "job", "db", "http", "cache", "view"}},
@@ -156,11 +156,20 @@ func mcpTools() []map[string]any {
 			}, []string{"environment_id", "namespace"}), "annotations": readOnly,
 		},
 		{
-			"name": "get_metric_series", "description": "Get a zero-filled time series (count, sum ms, avg ms, error_count, error_rate per bucket) for one Flare environment namespace, optionally narrowed to one operation by service/target/operation. hours 1 or 6 return minute buckets over a rolling window ending now (use hours=1 for the last 60 minutes), 24 to 168 return hour buckets, 672 returns day buckets. data_through is the latest bucket with data.",
+			"name": "get_namespace_overview", "description": "Mirror of the Flare namespace page: stats and a time series for one environment namespace plus the top operations by sum and by count (default 10, max 25), each with its own series. hours 1 or 6 return minute buckets over a rolling window ending now (use hours=1 for the last 60 minutes), 24 to 168 return hour buckets, 672 returns day buckets. Every series is {count, sum, error_count} arrays aligned to the shared buckets array (per-bucket avg = sum/count); data_through is the latest bucket with data.",
 			"inputSchema": objectSchema(map[string]any{
 				"environment_id": integer,
 				"namespace":      map[string]any{"type": "string", "enum": []string{"web", "job", "db", "http", "cache", "view"}},
-				"hours":          map[string]any{"type": "integer", "enum": []int{1, 6, 24, 48, 168, 672}, "default": 1},
+				"hours":          map[string]any{"type": "integer", "enum": []int{1, 6, 24, 48, 168, 672}, "default": 24},
+				"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": 25, "default": 10},
+			}, []string{"environment_id", "namespace"}), "annotations": readOnly,
+		},
+		{
+			"name": "get_operation_series", "description": "Mirror of the Flare operation page: stats and a time series for one environment namespace, narrowed to one operation by the service/target/operation selector from list_namespace_operations or get_namespace_overview (omit all three for the namespace total). Same windows, buckets, and series encoding as get_namespace_overview.",
+			"inputSchema": objectSchema(map[string]any{
+				"environment_id": integer,
+				"namespace":      map[string]any{"type": "string", "enum": []string{"web", "job", "db", "http", "cache", "view"}},
+				"hours":          map[string]any{"type": "integer", "enum": []int{1, 6, 24, 48, 168, 672}, "default": 24},
 				"service":        map[string]any{"type": "string", "maxLength": 255},
 				"target":         map[string]any{"type": "string", "maxLength": 255},
 				"operation":      map[string]any{"type": "string", "maxLength": 255},
@@ -210,6 +219,13 @@ type namespaceArguments struct {
 	Direction     string `json:"direction"`
 	Limit         int    `json:"limit"`
 	Query         string `json:"q"`
+}
+
+type namespaceOverviewArguments struct {
+	EnvironmentID int64  `json:"environment_id"`
+	Namespace     string `json:"namespace"`
+	Hours         int    `json:"hours"`
+	Limit         int    `json:"limit"`
 }
 
 type seriesArguments struct {
@@ -307,9 +323,23 @@ func callMCPTool(ctx context.Context, client *api.Client, call toolCall) (map[st
 		if arguments.Query != "" {
 			query.Set("q", arguments.Query)
 		}
-	case "get_metric_series":
+	case "get_namespace_overview":
+		path = "/api/v1/namespaces/overview"
+		arguments := namespaceOverviewArguments{Hours: 24, Limit: 10}
+		if err := decodeStrictArguments(call.Arguments, &arguments); err != nil {
+			return nil, err
+		}
+		if arguments.EnvironmentID <= 0 || !validNamespace(arguments.Namespace) || !validHours(arguments.Hours) ||
+			arguments.Limit < 1 || arguments.Limit > 25 {
+			return nil, fmt.Errorf("invalid namespace overview arguments")
+		}
+		query.Set("environment_id", strconv.FormatInt(arguments.EnvironmentID, 10))
+		query.Set("namespace", arguments.Namespace)
+		query.Set("hours", strconv.Itoa(arguments.Hours))
+		query.Set("limit", strconv.Itoa(arguments.Limit))
+	case "get_operation_series":
 		path = "/api/v1/series"
-		arguments := seriesArguments{Hours: 1}
+		arguments := seriesArguments{Hours: 24}
 		if err := decodeStrictArguments(call.Arguments, &arguments); err != nil {
 			return nil, err
 		}
