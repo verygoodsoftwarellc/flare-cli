@@ -27,7 +27,10 @@ flare project list --org 123
 flare environment list --project 456
 flare metrics overview --environment 789 --hours 24
 flare metrics namespace --environment 789 --namespace web --sort sum
+flare metrics series --environment 789 --namespace job --target EventJob --hours 1
 ```
+
+`metrics series` prints one row per bucket: minutes for 1h and 6h windows, hours for 24h to 168h, days for 672h. Narrow it to one operation with `--service`, `--target`, and `--operation`, using the `selector` values from `flare metrics namespace --json`.
 
 Add `--json` to any data command for stable machine-readable output.
 
@@ -46,4 +49,4 @@ The same binary includes a read-only MCP server over stdio:
 }
 ```
 
-It exposes only the five curated read tools corresponding to the CLI commands. It does not expose an arbitrary metrics query or any write operation.
+It exposes only the six curated read tools corresponding to the CLI commands (including `get_metric_series` for per-minute, per-hour, or per-day series). It does not expose an arbitrary metrics query or any write operation.

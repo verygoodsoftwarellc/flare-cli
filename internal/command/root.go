@@ -258,7 +258,7 @@ func newEnvironmentCommand(options *rootOptions) *cobra.Command {
 
 func newMetricsCommand(options *rootOptions) *cobra.Command {
 	parent := &cobra.Command{Use: "metrics", Short: "Inspect performance metrics"}
-	parent.AddCommand(newOverviewCommand(options), newNamespaceCommand(options))
+	parent.AddCommand(newOverviewCommand(options), newNamespaceCommand(options), newSeriesCommand(options))
 	return parent
 }
 
@@ -356,6 +356,64 @@ func newNamespaceCommand(options *rootOptions) *cobra.Command {
 	command.Flags().StringVar(&search, "search", "", "filter operations")
 	command.Flags().IntVar(&limit, "limit", 25, "maximum operations")
 	return command
+}
+
+func newSeriesCommand(options *rootOptions) *cobra.Command {
+	var environmentID int64
+	var hours int
+	var namespace, service, target, operation string
+	command := &cobra.Command{
+		Use:   "series",
+		Short: "Show a time series for a namespace or one operation",
+		Long: "Show count, sum, avg, and error rate per bucket. Windows of 1 or 6 hours use minute buckets, " +
+			"24 to 168 hours use hour buckets, and 672 hours uses day buckets. Narrow to one operation with the " +
+			"selector fields shown by `flare metrics namespace --json`.",
+		RunE: func(command *cobra.Command, _ []string) error {
+			if environmentID == 0 || namespace == "" {
+				return errors.New("--environment and --namespace are required")
+			}
+			client, err := options.client()
+			if err != nil {
+				return err
+			}
+			query := url.Values{
+				"environment_id": {strconv.FormatInt(environmentID, 10)}, "namespace": {namespace},
+				"hours": {strconv.Itoa(hours)},
+			}
+			addSelector(query, service, target, operation)
+			var response api.SeriesResponse
+			if err := client.Get(command.Context(), "/api/v1/series", query, &response); err != nil {
+				return err
+			}
+			if options.json {
+				return writeJSON(options.output, response)
+			}
+			rows := make([][]string, 0, len(response.Series))
+			for _, point := range response.Series {
+				rows = append(rows, []string{point.T, fmt.Sprint(point.Count), formatMilliseconds(point.Sum), formatMilliseconds(int64(point.Avg)), fmt.Sprintf("%.2f%%", point.ErrorRate)})
+			}
+			return writeTable(options.output, []string{"TIME", "COUNT", "SUM", "AVG", "ERROR"}, rows)
+		},
+	}
+	command.Flags().Int64VarP(&environmentID, "environment", "e", 0, "environment ID")
+	command.Flags().StringVarP(&namespace, "namespace", "n", "", "web, job, db, http, cache, or view")
+	command.Flags().IntVar(&hours, "hours", 1, "time window: 1, 6, 24, 48, 168, or 672")
+	command.Flags().StringVar(&service, "service", "", "filter to one service (e.g. rails, solid_queue, a host)")
+	command.Flags().StringVar(&target, "target", "", "filter to one target (e.g. UsersController#index, EventJob)")
+	command.Flags().StringVar(&operation, "operation", "", "filter to one operation (status class such as 2xx for web/http)")
+	return command
+}
+
+func addSelector(query url.Values, service, target, operation string) {
+	if service != "" {
+		query.Set("service", service)
+	}
+	if target != "" {
+		query.Set("target", target)
+	}
+	if operation != "" {
+		query.Set("operation", operation)
+	}
 }
 
 func writeJSON(writer io.Writer, value any) error {
