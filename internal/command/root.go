@@ -258,7 +258,7 @@ func newEnvironmentCommand(options *rootOptions) *cobra.Command {
 
 func newMetricsCommand(options *rootOptions) *cobra.Command {
 	parent := &cobra.Command{Use: "metrics", Short: "Inspect performance metrics"}
-	parent.AddCommand(newOverviewCommand(options), newNamespaceCommand(options), newNamespaceOverviewCommand(options), newSeriesCommand(options))
+	parent.AddCommand(newOverviewCommand(options), newNamespaceCommand(options), newNamespaceOverviewCommand(options), newSeriesCommand(options), newQueryCommand(options))
 	return parent
 }
 
@@ -487,6 +487,108 @@ func seriesRows(buckets []string, series api.Series) [][]string {
 		rows = append(rows, []string{bucket, fmt.Sprint(count), formatMilliseconds(sum), formatMilliseconds(avg), fmt.Sprintf("%.2f%%", errorRate)})
 	}
 	return rows
+}
+
+func newQueryCommand(options *rootOptions) *cobra.Command {
+	var environmentID int64
+	var hours, limit, minCount int
+	var namespace, service, target, operation, sort, direction string
+	var groupBy []string
+	var series bool
+	command := &cobra.Command{
+		Use:   "query",
+		Short: "Generic metrics query: filter, group, rank, optionally with series",
+		Long: "Filter on any of namespace, service, target, and operation; group by any subset of them; rank the " +
+			"groups by count, sum, avg, or error_rate; and optionally attach a series to the total and to each " +
+			"group. The other metrics commands are presets of this one. Dimension meanings differ by namespace " +
+			"(web: target is controller#action and operation is the HTTP status class; http: service is the remote " +
+			"host; db: target is the table and operation the SQL verb; job: target is the job class).",
+		RunE: func(command *cobra.Command, _ []string) error {
+			if environmentID == 0 {
+				return errors.New("--environment is required")
+			}
+			client, err := options.client()
+			if err != nil {
+				return err
+			}
+			query := url.Values{
+				"environment_id": {strconv.FormatInt(environmentID, 10)},
+				"hours":          {strconv.Itoa(hours)},
+				"sort":           {sort},
+				"direction":      {direction},
+				"limit":          {strconv.Itoa(limit)},
+			}
+			if namespace != "" {
+				query.Set("namespace", namespace)
+			}
+			addSelector(query, service, target, operation)
+			if len(groupBy) > 0 {
+				query.Set("group_by", strings.Join(groupBy, ","))
+			}
+			if series {
+				query.Set("series", "true")
+			}
+			if minCount > 0 {
+				query.Set("min_count", strconv.Itoa(minCount))
+			}
+			var response api.QueryResponse
+			if err := client.Get(command.Context(), "/api/v1/metrics/query", query, &response); err != nil {
+				return err
+			}
+			if options.json {
+				return writeJSON(options.output, response)
+			}
+			fmt.Fprintf(options.output, "%s: %d requests, %s total, %s avg, %.2f%% errors (data through %s)\n",
+				response.Environment.Name, response.Total.Count, formatMilliseconds(response.Total.Sum),
+				formatMilliseconds(int64(response.Total.Avg)), response.Total.ErrorRate, dataThrough(response.DataThrough))
+			if len(response.Groups) == 0 {
+				return nil
+			}
+			fmt.Fprintln(options.output)
+			header := []string{"LABEL"}
+			for _, dimension := range response.GroupBy {
+				header = append(header, strings.ToUpper(dimension))
+			}
+			header = append(header, "COUNT", "SUM", "AVG", "ERROR", "IMPACT")
+			rows := make([][]string, 0, len(response.Groups))
+			for _, group := range response.Groups {
+				row := []string{group.Label}
+				for _, dimension := range response.GroupBy {
+					row = append(row, selectorValue(group.Selector, dimension))
+				}
+				row = append(row, fmt.Sprint(group.Count), formatMilliseconds(group.Sum), formatMilliseconds(int64(group.Avg)), fmt.Sprintf("%.2f%%", group.ErrorRate), fmt.Sprintf("%.1f%%", group.Impact))
+				rows = append(rows, row)
+			}
+			return writeTable(options.output, header, rows)
+		},
+	}
+	command.Flags().Int64VarP(&environmentID, "environment", "e", 0, "environment ID")
+	command.Flags().IntVar(&hours, "hours", 24, "time window: 1, 6, 24, 48, 168, or 672")
+	command.Flags().StringVarP(&namespace, "namespace", "n", "", "filter: web, job, db, http, cache, or view")
+	command.Flags().StringVar(&service, "service", "", "filter to one service")
+	command.Flags().StringVar(&target, "target", "", "filter to one target")
+	command.Flags().StringVar(&operation, "operation", "", "filter to one operation")
+	command.Flags().StringSliceVar(&groupBy, "group-by", nil, "group by dimensions: namespace, service, target, operation (repeatable or comma separated)")
+	command.Flags().StringVar(&sort, "sort", "sum", "rank groups by count, sum, avg, or error_rate")
+	command.Flags().StringVar(&direction, "direction", "desc", "asc or desc")
+	command.Flags().IntVar(&limit, "limit", 10, "groups to return (1-100, or 1-25 with --series)")
+	command.Flags().BoolVar(&series, "series", false, "attach a bucketed series to the total and each group (JSON output)")
+	command.Flags().IntVar(&minCount, "min-count", 0, "ignore groups with fewer requests (useful with --sort error_rate)")
+	return command
+}
+
+func selectorValue(selector api.Selector, dimension string) string {
+	switch dimension {
+	case "namespace":
+		return selector.Namespace
+	case "service":
+		return selector.Service
+	case "target":
+		return selector.Target
+	case "operation":
+		return selector.Operation
+	}
+	return ""
 }
 
 func addSelector(query url.Values, service, target, operation string) {

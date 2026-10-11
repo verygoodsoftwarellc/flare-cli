@@ -22,9 +22,11 @@ type Environment struct {
 	Name      string `json:"name"`
 }
 
-// Selector identifies one operation precisely enough to pass to the series
-// endpoint. Blank parts are omitted by the server.
+// Selector identifies one operation (or one group of a generic query)
+// precisely enough to pass back as a filter. Blank parts are omitted by the
+// server.
 type Selector struct {
+	Namespace string `json:"namespace,omitempty"`
 	Service   string `json:"service,omitempty"`
 	Target    string `json:"target,omitempty"`
 	Operation string `json:"operation,omitempty"`
@@ -105,6 +107,40 @@ type RankedOperation struct {
 	Selector  *Selector `json:"selector,omitempty"`
 	Stats
 	Series Series `json:"series"`
+}
+
+// QueryTotal is the filtered set's totals, with a series when requested.
+type QueryTotal struct {
+	Stats
+	Series *Series `json:"series,omitempty"`
+}
+
+type QueryGroup struct {
+	Selector Selector `json:"selector"`
+	Label    string   `json:"label"`
+	Stats
+	Series *Series `json:"series,omitempty"`
+}
+
+// QueryResponse is the generic GET /api/v1/metrics/query result. Buckets is
+// present only when series were requested.
+type QueryResponse struct {
+	Environment Environment  `json:"environment"`
+	Hours       int          `json:"hours"`
+	Bucket      string       `json:"bucket"`
+	AsOf        string       `json:"as_of"`
+	WindowStart string       `json:"window_start"`
+	WindowEnd   string       `json:"window_end"`
+	Buckets     []string     `json:"buckets,omitempty"`
+	Filter      Selector     `json:"filter"`
+	GroupBy     []string     `json:"group_by"`
+	Sort        string       `json:"sort"`
+	Direction   string       `json:"direction"`
+	Limit       int          `json:"limit"`
+	MinCount    int          `json:"min_count"`
+	DataThrough *string      `json:"data_through"`
+	Total       QueryTotal   `json:"total"`
+	Groups      []QueryGroup `json:"groups"`
 }
 
 type NamespaceOverviewResponse struct {

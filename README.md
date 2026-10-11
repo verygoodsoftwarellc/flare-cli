@@ -29,7 +29,10 @@ flare metrics overview --environment 789 --hours 24
 flare metrics namespace --environment 789 --namespace web --sort sum
 flare metrics namespace-overview --environment 789 --namespace job --hours 1
 flare metrics series --environment 789 --namespace job --target EventJob --hours 1
+flare metrics query --environment 789 --namespace web --target UsersController#index --group-by operation --sort count
 ```
+
+`metrics query` is the generic form the other metrics commands are presets of: filter on any of namespace, service, target, and operation, group by any subset of them with `--group-by`, rank with `--sort` and `--direction` (add `--min-count` for rate sorts), and attach series with `--series` (JSON output).
 
 The metrics commands mirror the Flare web pages. `overview` is the environment page (per-namespace stats and top operations). `namespace-overview` is the namespace page: stats, a time series, and the top operations by sum and by count, each with its own series. `namespace` is the paginated operations table. `series` is the operation page: stats and one row per bucket for one operation, selected with `--service`, `--target`, and `--operation` from the `selector` values in `namespace --json`.
 
@@ -52,4 +55,4 @@ The same binary includes a read-only MCP server over stdio:
 }
 ```
 
-It exposes only the seven curated read tools corresponding to the CLI commands: the three catalog tools plus `get_environment_overviews`, `get_namespace_overview`, `list_namespace_operations`, and `get_operation_series`. It does not expose an arbitrary metrics query or any write operation.
+It exposes only the eight curated read tools corresponding to the CLI commands: the three catalog tools, the presets `get_environment_overviews`, `get_namespace_overview`, `list_namespace_operations`, and `get_operation_series`, and the generic `query_metrics`. It does not expose an arbitrary metrics query or any write operation.

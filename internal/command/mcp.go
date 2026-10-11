@@ -165,6 +165,23 @@ func mcpTools() []map[string]any {
 			}, []string{"environment_id", "namespace"}), "annotations": readOnly,
 		},
 		{
+			"name": "query_metrics", "description": "Generic Flare metrics query; the other metrics tools are presets of it. Flare stores count, total ms, and error count per (namespace, service, target, operation) at minute/hour/day grain. Filter on any of the four dimensions, group_by any subset, rank groups by count, sum, avg, or error_rate (use min_count with rate sorts), and set series=true to attach {count, sum, error_count} arrays aligned to the shared buckets array (limit <= 25 with series). Dimension meanings by namespace: web — service: framework, target: controller#action, operation: HTTP status class (2xx..5xx); job — service: backend (solid_queue, sidekiq), target: job class, operation: perform; db — service: adapter, target: table, operation: SQL verb; http — service: remote host, target: method and path, operation: HTTP status class; cache — service: store, operation: read.hit/read.miss/write/delete; view — service: renderer, target: template path, operation: template/partial/layout/collection. Examples: error rate per status class for one controller (filter namespace=web + target, group_by operation); slowest hosts (namespace=http, group_by service, sort avg); jobs failing most (namespace=job, group_by target, sort error_rate, min_count 10). Totals across namespaces are not additive.",
+			"inputSchema": objectSchema(map[string]any{
+				"environment_id": integer,
+				"hours":          map[string]any{"type": "integer", "enum": []int{1, 6, 24, 48, 168, 672}, "default": 24},
+				"namespace":      map[string]any{"type": "string", "enum": []string{"web", "job", "db", "http", "cache", "view"}},
+				"service":        map[string]any{"type": "string", "maxLength": 255},
+				"target":         map[string]any{"type": "string", "maxLength": 255},
+				"operation":      map[string]any{"type": "string", "maxLength": 255},
+				"group_by":       map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []string{"namespace", "service", "target", "operation"}}, "maxItems": 4},
+				"sort":           map[string]any{"type": "string", "enum": []string{"count", "sum", "avg", "error_rate"}, "default": "sum"},
+				"direction":      map[string]any{"type": "string", "enum": []string{"asc", "desc"}, "default": "desc"},
+				"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "default": 10},
+				"series":         map[string]any{"type": "boolean", "default": false},
+				"min_count":      map[string]any{"type": "integer", "minimum": 0, "default": 0},
+			}, []string{"environment_id"}), "annotations": readOnly,
+		},
+		{
 			"name": "get_operation_series", "description": "Mirror of the Flare operation page: stats and a time series for one environment namespace, narrowed to one operation by the service/target/operation selector from list_namespace_operations or get_namespace_overview (omit all three for the namespace total). Same windows, buckets, and series encoding as get_namespace_overview.",
 			"inputSchema": objectSchema(map[string]any{
 				"environment_id": integer,
@@ -226,6 +243,21 @@ type namespaceOverviewArguments struct {
 	Namespace     string `json:"namespace"`
 	Hours         int    `json:"hours"`
 	Limit         int    `json:"limit"`
+}
+
+type queryArguments struct {
+	EnvironmentID int64    `json:"environment_id"`
+	Hours         int      `json:"hours"`
+	Namespace     string   `json:"namespace"`
+	Service       string   `json:"service"`
+	Target        string   `json:"target"`
+	Operation     string   `json:"operation"`
+	GroupBy       []string `json:"group_by"`
+	Sort          string   `json:"sort"`
+	Direction     string   `json:"direction"`
+	Limit         int      `json:"limit"`
+	Series        bool     `json:"series"`
+	MinCount      int      `json:"min_count"`
 }
 
 type seriesArguments struct {
@@ -337,6 +369,40 @@ func callMCPTool(ctx context.Context, client *api.Client, call toolCall) (map[st
 		query.Set("namespace", arguments.Namespace)
 		query.Set("hours", strconv.Itoa(arguments.Hours))
 		query.Set("limit", strconv.Itoa(arguments.Limit))
+	case "query_metrics":
+		path = "/api/v1/metrics/query"
+		arguments := queryArguments{Hours: 24, Sort: "sum", Direction: "desc", Limit: 10}
+		if err := decodeStrictArguments(call.Arguments, &arguments); err != nil {
+			return nil, err
+		}
+		maxLimit := 100
+		if arguments.Series {
+			maxLimit = 25
+		}
+		if arguments.EnvironmentID <= 0 || !validHours(arguments.Hours) || (arguments.Namespace != "" && !validNamespace(arguments.Namespace)) ||
+			!validQuerySort(arguments.Sort) || (arguments.Direction != "asc" && arguments.Direction != "desc") ||
+			arguments.Limit < 1 || arguments.Limit > maxLimit || arguments.MinCount < 0 ||
+			len(arguments.Service) > 255 || len(arguments.Target) > 255 || len(arguments.Operation) > 255 || !validGroupBy(arguments.GroupBy) {
+			return nil, fmt.Errorf("invalid query arguments")
+		}
+		query.Set("environment_id", strconv.FormatInt(arguments.EnvironmentID, 10))
+		query.Set("hours", strconv.Itoa(arguments.Hours))
+		query.Set("sort", arguments.Sort)
+		query.Set("direction", arguments.Direction)
+		query.Set("limit", strconv.Itoa(arguments.Limit))
+		if arguments.Namespace != "" {
+			query.Set("namespace", arguments.Namespace)
+		}
+		addSelector(query, arguments.Service, arguments.Target, arguments.Operation)
+		if len(arguments.GroupBy) > 0 {
+			query.Set("group_by", strings.Join(arguments.GroupBy, ","))
+		}
+		if arguments.Series {
+			query.Set("series", "true")
+		}
+		if arguments.MinCount > 0 {
+			query.Set("min_count", strconv.Itoa(arguments.MinCount))
+		}
 	case "get_operation_series":
 		path = "/api/v1/series"
 		arguments := seriesArguments{Hours: 24}
@@ -398,6 +464,24 @@ func validHours(hours int) bool {
 
 func validSort(sort string) bool {
 	return sort == "count" || sort == "sum" || sort == "avg" || sort == "error_rate" || sort == "impact"
+}
+
+func validQuerySort(sort string) bool {
+	return sort == "count" || sort == "sum" || sort == "avg" || sort == "error_rate"
+}
+
+func validGroupBy(dimensions []string) bool {
+	seen := map[string]bool{}
+	for _, dimension := range dimensions {
+		if dimension != "namespace" && dimension != "service" && dimension != "target" && dimension != "operation" {
+			return false
+		}
+		if seen[dimension] {
+			return false
+		}
+		seen[dimension] = true
+	}
+	return true
 }
 
 func validNamespace(namespace string) bool {
