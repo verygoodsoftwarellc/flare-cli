@@ -76,7 +76,9 @@ type Stats struct {
 	Avg        float64 `json:"avg"`
 	ErrorCount int64   `json:"error_count"`
 	ErrorRate  float64 `json:"error_rate"`
-	Impact     float64 `json:"impact,omitempty"`
+	// Impact is present only where the server reports it (groups and the
+	// namespace total); a pointer keeps a reported zero distinct from absent.
+	Impact *float64 `json:"impact,omitempty"`
 }
 
 // Series holds one value per entry of the response's Buckets, zero-filled.

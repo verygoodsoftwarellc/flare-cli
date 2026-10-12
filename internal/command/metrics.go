@@ -148,8 +148,11 @@ func statsCells(count, sum int64, avg, errorRate float64) []string {
 	return []string{fmt.Sprint(count), formatMilliseconds(sum), formatMilliseconds(int64(avg)), fmt.Sprintf("%.2f%%", errorRate)}
 }
 
-func impactCell(impact float64) string {
-	return fmt.Sprintf("%.1f%%", impact)
+func impactCell(impact *float64) string {
+	if impact == nil {
+		return ""
+	}
+	return fmt.Sprintf("%.1f%%", *impact)
 }
 
 func rankedRows(operations []api.RankedOperation) [][]string {
@@ -374,6 +377,9 @@ func newQueryCommand(options *rootOptions) *cobra.Command {
 		RunE: func(command *cobra.Command, _ []string) error {
 			if err := errors.Join(scope.validate(false), selector.validate()); err != nil {
 				return err
+			}
+			if minCount < 0 {
+				return errors.New("min-count must be 0 or more")
 			}
 			client, err := options.client()
 			if err != nil {

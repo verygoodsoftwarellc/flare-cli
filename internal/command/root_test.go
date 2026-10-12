@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -222,5 +223,37 @@ func TestVerifyAuthenticationChecksTokenWithServer(t *testing.T) {
 				t.Fatalf("expected authentication check to pass, got %v", err)
 			}
 		})
+	}
+}
+
+func TestZeroImpactSurvivesJSONRoundTrip(t *testing.T) {
+	var group api.QueryGroup
+	if err := json.Unmarshal([]byte(`{"selector":{},"label":"x","count":0,"sum":0,"avg":0,"error_count":0,"error_rate":0,"impact":0,"series":null}`), &group); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(group)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"impact":0`) {
+		t.Fatalf("zero impact was dropped: %s", encoded)
+	}
+	var stats api.Stats
+	if err := json.Unmarshal([]byte(`{"count":1,"sum":2,"avg":2,"error_count":0,"error_rate":0}`), &stats); err != nil {
+		t.Fatal(err)
+	}
+	if encoded, _ := json.Marshal(stats); strings.Contains(string(encoded), "impact") {
+		t.Fatalf("absent impact was invented: %s", encoded)
+	}
+}
+
+func TestQueryRejectsNegativeMinCount(t *testing.T) {
+	root := newRootCommand("flare")
+	root.SetArgs([]string{"metrics", "query", "--environment", "1", "--min-count", "-1"})
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "min-count") {
+		t.Fatalf("expected min-count rejection, got %v", err)
 	}
 }
