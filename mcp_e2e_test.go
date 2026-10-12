@@ -44,7 +44,7 @@ func TestMCPCommandEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v\nstderr: %s", err, stderr.String())
 	}
-	if len(tools.Tools) != 5 {
+	if len(tools.Tools) != 8 {
 		t.Fatalf("expected 8 tools, got %d", len(tools.Tools))
 	}
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "list_organizations", Arguments: map[string]any{}})
