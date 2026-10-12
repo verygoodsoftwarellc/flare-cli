@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
@@ -60,6 +61,14 @@ func (s *scope) bindFlags(command *cobra.Command, namespaceHelp string) {
 	command.Flags().IntVar(&s.Hours, "hours", 24, "time window: "+joinInts(allowedHours))
 }
 
+// setDefaults fills the window the way the CLI flag default does, for MCP
+// inputs that omit it.
+func (s *scope) setDefaults() {
+	if s.Hours == 0 {
+		s.Hours = 24
+	}
+}
+
 func (s scope) validate(namespaceRequired bool) error {
 	if s.EnvironmentID <= 0 {
 		return errors.New("environment is required")
@@ -102,7 +111,7 @@ func (s *selector) bindFlags(command *cobra.Command) {
 
 func (s selector) validate() error {
 	for name, value := range map[string]string{"service": s.Service, "target": s.Target, "operation": s.Operation} {
-		if len(value) > maxFilterLength {
+		if utf8.RuneCountInString(value) > maxFilterLength {
 			return fmt.Errorf("%s accepts at most %d characters", name, maxFilterLength)
 		}
 	}

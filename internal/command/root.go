@@ -17,9 +17,11 @@ import (
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/auth"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/config"
+	"github.com/verygoodsoftwarellc/flare-cli/internal/version"
 )
 
 type rootOptions struct {
+	name    string
 	apiURL  string
 	json    bool
 	verbose bool
@@ -28,15 +30,16 @@ type rootOptions struct {
 	input   io.Reader
 }
 
-func Execute() error {
-	return newRootCommand().Execute()
+func Execute(name string) error {
+	return newRootCommand(name).Execute()
 }
 
-func newRootCommand() *cobra.Command {
-	options := &rootOptions{output: os.Stdout, errors: os.Stderr, input: os.Stdin}
+func newRootCommand(name string) *cobra.Command {
+	options := &rootOptions{name: name, output: os.Stdout, errors: os.Stderr, input: os.Stdin}
 	command := &cobra.Command{
-		Use:           "flare",
+		Use:           name,
 		Short:         "Inspect application performance in Flare",
+		Version:       version.Current(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -65,12 +68,16 @@ func (options *rootOptions) client() (*api.Client, error) {
 	}
 	token, err := settings.TokenValue()
 	if err != nil {
-		return nil, err
+		return nil, options.authenticationError(err)
 	}
 	client := api.New(settings.APIURL, token)
 	client.Verbose = options.verbose
 	client.ErrWriter = options.errors
 	return client, nil
+}
+
+func (options *rootOptions) authenticationError(err error) error {
+	return fmt.Errorf("%w; run `%s auth login` or set FLARE_TOKEN", err, options.name)
 }
 
 func newAuthCommand(options *rootOptions) *cobra.Command {
@@ -127,7 +134,7 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 			}
 			token, err := settings.TokenValue()
 			if err != nil {
-				return err
+				return options.authenticationError(err)
 			}
 			client := api.New(settings.APIURL, token)
 			client.Verbose = options.verbose
@@ -211,11 +218,11 @@ func newProjectCommand(options *rootOptions) *cobra.Command {
 			if options.json {
 				return writeJSON(options.output, response)
 			}
-			rows := make([][]string, 0, len(response.Projects))
-			for _, project := range response.Projects {
-				rows = append(rows, []string{fmt.Sprint(project.ID), fmt.Sprint(project.OrganizationID), project.Name})
+			organizations, err := allOrganizations(command.Context(), client)
+			if err != nil {
+				return err
 			}
-			return writeTable(options.output, []string{"ID", "ORG", "NAME"}, rows)
+			return writeTable(options.output, []string{"ID", "NAME", "ORGANIZATION"}, projectRows(response.Projects, organizations.Organizations))
 		},
 	}
 	list.Flags().Int64Var(&organizationID, "org", 0, "filter by organization ID")
@@ -243,11 +250,15 @@ func newEnvironmentCommand(options *rootOptions) *cobra.Command {
 			if options.json {
 				return writeJSON(options.output, response)
 			}
-			rows := make([][]string, 0, len(response.Environments))
-			for _, environment := range response.Environments {
-				rows = append(rows, []string{fmt.Sprint(environment.ID), fmt.Sprint(environment.ProjectID), environment.Name})
+			projects, err := allProjects(command.Context(), client, url.Values{"limit": {"100"}})
+			if err != nil {
+				return err
 			}
-			return writeTable(options.output, []string{"ID", "PROJECT", "NAME"}, rows)
+			organizations, err := allOrganizations(command.Context(), client)
+			if err != nil {
+				return err
+			}
+			return writeTable(options.output, []string{"ID", "NAME", "PROJECT", "ORGANIZATION"}, environmentRows(response.Environments, projects.Projects, organizations.Organizations))
 		},
 	}
 	list.Flags().Int64Var(&projectID, "project", 0, "filter by project ID")
@@ -276,6 +287,50 @@ func organizationRows(organizations []api.Organization) [][]string {
 		rows = append(rows, []string{fmt.Sprint(organization.ID), organization.Name})
 	}
 	return rows
+}
+
+func projectRows(projects []api.Project, organizations []api.Organization) [][]string {
+	organizationNames := make(map[int64]string, len(organizations))
+	for _, organization := range organizations {
+		organizationNames[organization.ID] = organization.Name
+	}
+
+	rows := make([][]string, 0, len(projects))
+	for _, project := range projects {
+		organizationName := nameOrID(organizationNames[project.OrganizationID], project.OrganizationID)
+		rows = append(rows, []string{fmt.Sprint(project.ID), project.Name, organizationName})
+	}
+	return rows
+}
+
+func environmentRows(environments []api.Environment, projects []api.Project, organizations []api.Organization) [][]string {
+	organizationNames := make(map[int64]string, len(organizations))
+	for _, organization := range organizations {
+		organizationNames[organization.ID] = organization.Name
+	}
+	projectsByID := make(map[int64]api.Project, len(projects))
+	for _, project := range projects {
+		projectsByID[project.ID] = project
+	}
+
+	rows := make([][]string, 0, len(environments))
+	for _, environment := range environments {
+		project, found := projectsByID[environment.ProjectID]
+		projectName := nameOrID(project.Name, environment.ProjectID)
+		organizationName := "-"
+		if found {
+			organizationName = nameOrID(organizationNames[project.OrganizationID], project.OrganizationID)
+		}
+		rows = append(rows, []string{fmt.Sprint(environment.ID), environment.Name, projectName, organizationName})
+	}
+	return rows
+}
+
+func nameOrID(name string, id int64) string {
+	if name != "" {
+		return name
+	}
+	return fmt.Sprint(id)
 }
 
 func allOrganizations(ctx context.Context, client *api.Client) (api.OrganizationsResponse, error) {

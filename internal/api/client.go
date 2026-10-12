@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/verygoodsoftwarellc/flare-cli/internal/version"
 )
 
 type Client struct {
@@ -62,7 +64,7 @@ func (client *Client) Get(ctx context.Context, path string, query url.Values, ou
 	}
 	request.Header.Set("Authorization", "Bearer "+client.Token)
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("User-Agent", "flare-cli/dev")
+	request.Header.Set("User-Agent", "flare-cli/"+version.Current())
 
 	response, err := client.HTTPClient.Do(request)
 	if err != nil {

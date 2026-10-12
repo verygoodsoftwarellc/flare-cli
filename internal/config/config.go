@@ -128,7 +128,7 @@ func (config *Config) TokenValue() (string, error) {
 		if config.Token != "" && config.TokenAPIURL == config.APIURL {
 			return config.Token, nil
 		}
-		return "", fmt.Errorf("no stored credentials for %s; run `flare auth login` or set FLARE_TOKEN", config.APIURL)
+		return "", fmt.Errorf("no stored credentials for %s", config.APIURL)
 	}
 	token, err := keyringGet(keyringService, config.APIURL)
 	if err == nil {
@@ -137,7 +137,7 @@ func (config *Config) TokenValue() (string, error) {
 	if config.TokenBackend == "" && config.Token != "" {
 		return config.Token, nil
 	}
-	return "", errors.New("not authenticated; run `flare auth login`")
+	return "", errors.New("not authenticated")
 }
 
 // StoreToken prefers the operating system credential store. On systems where
