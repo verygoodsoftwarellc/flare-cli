@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -103,9 +104,10 @@ func handleMCPRequest(ctx context.Context, client *api.Client, request mcpReques
 			}
 			return response
 		}
-		encoded, _ := json.Marshal(result)
+		// The server body is passed through untouched: no boxing into
+		// map[string]any and no re-encoding of large series payloads.
 		response.Result = map[string]any{
-			"content":           []map[string]any{{"type": "text", "text": string(encoded)}},
+			"content":           []map[string]any{{"type": "text", "text": string(result)}},
 			"structuredContent": result,
 		}
 	default:
@@ -117,10 +119,19 @@ func handleMCPRequest(ctx context.Context, client *api.Client, request mcpReques
 func mcpTools() []map[string]any {
 	readOnly := map[string]any{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}
 	integer := map[string]any{"type": "integer"}
-	pagination := map[string]any{
-		"cursor": map[string]any{"type": "string"},
-		"limit":  map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "default": 100},
+	text := map[string]any{"type": "string", "maxLength": maxFilterLength}
+	hours := map[string]any{"type": "integer", "enum": allowedHours, "default": 24}
+	namespace := map[string]any{"type": "string", "enum": namespaces}
+	direction := map[string]any{"type": "string", "enum": directions, "default": "desc"}
+	sortBy := func(values []string) map[string]any {
+		return map[string]any{"type": "string", "enum": values, "default": "sum"}
 	}
+	limit := func(maximum, fallback int) map[string]any {
+		return map[string]any{"type": "integer", "minimum": 1, "maximum": maximum, "default": fallback}
+	}
+	pagination := map[string]any{"cursor": map[string]any{"type": "string"}, "limit": limit(100, 100)}
+	scope := map[string]any{"environment_id": integer, "namespace": namespace, "hours": hours}
+	selector := map[string]any{"service": text, "target": text, "operation": text}
 	return []map[string]any{
 		{
 			"name": "list_organizations", "description": "List Flare organizations the user can access.",
@@ -138,59 +149,38 @@ func mcpTools() []map[string]any {
 			"name": "get_environment_overviews", "description": "Get bulk performance summaries for up to 25 Flare environments.",
 			"inputSchema": objectSchema(map[string]any{
 				"environment_ids": map[string]any{"type": "array", "items": integer, "minItems": 1, "maxItems": 25},
-				"hours":           map[string]any{"type": "integer", "enum": []int{1, 6, 24, 48, 168, 672}, "default": 24},
-				"sort":            map[string]any{"type": "string", "enum": []string{"count", "sum", "avg", "error_rate", "impact"}, "default": "sum"},
-				"limit":           map[string]any{"type": "integer", "minimum": 1, "maximum": 25, "default": 5},
+				"hours":           hours,
+				"sort":            sortBy(sorts),
+				"limit":           limit(25, 5),
 			}, []string{"environment_ids"}), "annotations": readOnly,
 		},
 		{
 			"name": "list_namespace_operations", "description": "Paginated, searchable, sortable operations table for one Flare environment namespace (aggregates only, no series). Each operation includes a selector (service/target/operation) that can be passed to get_operation_series.",
-			"inputSchema": objectSchema(map[string]any{
-				"environment_id": integer,
-				"namespace":      map[string]any{"type": "string", "enum": []string{"web", "job", "db", "http", "cache", "view"}},
-				"hours":          map[string]any{"type": "integer", "enum": []int{1, 6, 24, 48, 168, 672}, "default": 24},
-				"sort":           map[string]any{"type": "string", "enum": []string{"count", "sum", "avg", "error_rate", "impact"}, "default": "sum"},
-				"direction":      map[string]any{"type": "string", "enum": []string{"asc", "desc"}, "default": "desc"},
-				"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
-				"q":              map[string]any{"type": "string", "maxLength": 255},
-			}, []string{"environment_id", "namespace"}), "annotations": readOnly,
+			"inputSchema": objectSchema(mergeProperties(scope, map[string]any{
+				"sort":      sortBy(sorts),
+				"direction": direction,
+				"limit":     limit(100, 25),
+				"q":         text,
+			}), []string{"environment_id", "namespace"}), "annotations": readOnly,
 		},
 		{
-			"name": "get_namespace_overview", "description": "Mirror of the Flare namespace page: stats and a time series for one environment namespace plus the top operations by sum and by count (default 10, max 25), each with its own series. hours 1 or 6 return minute buckets over a rolling window ending now (use hours=1 for the last 60 minutes), 24 to 168 return hour buckets, 672 returns day buckets. Every series is {count, sum, error_count} arrays aligned to the shared buckets array (per-bucket avg = sum/count); data_through is the latest bucket with data.",
-			"inputSchema": objectSchema(map[string]any{
-				"environment_id": integer,
-				"namespace":      map[string]any{"type": "string", "enum": []string{"web", "job", "db", "http", "cache", "view"}},
-				"hours":          map[string]any{"type": "integer", "enum": []int{1, 6, 24, 48, 168, 672}, "default": 24},
-				"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": 25, "default": 10},
-			}, []string{"environment_id", "namespace"}), "annotations": readOnly,
+			"name": "get_namespace_overview", "description": "Mirror of the Flare namespace page: stats and a time series for one environment namespace plus the top operations by sum and by count (default 10, max 25), each with its own series. " + windowHelp + " " + seriesHelp,
+			"inputSchema": objectSchema(mergeProperties(scope, map[string]any{"limit": limit(maxSeriesLimit, 10)}), []string{"environment_id", "namespace"}), "annotations": readOnly,
 		},
 		{
-			"name": "query_metrics", "description": "Generic Flare metrics query; the other metrics tools are presets of it. Flare stores count, total ms, and error count per (namespace, service, target, operation) at minute/hour/day grain. Filter on any of the four dimensions, group_by any subset, rank groups by count, sum, avg, or error_rate (use min_count with rate sorts), and set series=true to attach {count, sum, error_count} arrays aligned to the shared buckets array (limit <= 25 with series). Dimension meanings by namespace: web — service: framework, target: controller#action, operation: HTTP status class (2xx..5xx); job — service: backend (solid_queue, sidekiq), target: job class, operation: perform; db — service: adapter, target: table, operation: SQL verb; http — service: remote host, target: method and path, operation: HTTP status class; cache — service: store, operation: read.hit/read.miss/write/delete; view — service: renderer, target: template path, operation: template/partial/layout/collection. Examples: error rate per status class for one controller (filter namespace=web + target, group_by operation); slowest hosts (namespace=http, group_by service, sort avg); jobs failing most (namespace=job, group_by target, sort error_rate, min_count 10). Totals across namespaces are not additive.",
-			"inputSchema": objectSchema(map[string]any{
-				"environment_id": integer,
-				"hours":          map[string]any{"type": "integer", "enum": []int{1, 6, 24, 48, 168, 672}, "default": 24},
-				"namespace":      map[string]any{"type": "string", "enum": []string{"web", "job", "db", "http", "cache", "view"}},
-				"service":        map[string]any{"type": "string", "maxLength": 255},
-				"target":         map[string]any{"type": "string", "maxLength": 255},
-				"operation":      map[string]any{"type": "string", "maxLength": 255},
-				"group_by":       map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []string{"namespace", "service", "target", "operation"}}, "maxItems": 4},
-				"sort":           map[string]any{"type": "string", "enum": []string{"count", "sum", "avg", "error_rate"}, "default": "sum"},
-				"direction":      map[string]any{"type": "string", "enum": []string{"asc", "desc"}, "default": "desc"},
-				"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "default": 10},
-				"series":         map[string]any{"type": "boolean", "default": false},
-				"min_count":      map[string]any{"type": "integer", "minimum": 0, "default": 0},
-			}, []string{"environment_id"}), "annotations": readOnly,
+			"name": "query_metrics", "description": "Generic Flare metrics query; the other metrics tools are presets of it. Flare stores count, total ms, and error count per (namespace, service, target, operation). Filter on any of the four dimensions, group_by any subset, rank groups by count, sum, avg, or error_rate (use min_count with rate sorts), and set series=true to attach series (limit <= 25 with series). " + windowHelp + " " + seriesHelp + " " + dimensionHelp + " Examples: error rate per status class for one controller (filter namespace=web + target, group_by operation); slowest hosts (namespace=http, group_by service, sort avg); jobs failing most (namespace=job, group_by target, sort error_rate, min_count 10). Totals across namespaces are not additive.",
+			"inputSchema": objectSchema(mergeProperties(mergeProperties(scope, selector), map[string]any{
+				"group_by":  map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": dimensions}, "maxItems": len(dimensions)},
+				"sort":      sortBy(querySorts),
+				"direction": direction,
+				"limit":     limit(maxQueryLimit, 10),
+				"series":    map[string]any{"type": "boolean", "default": false},
+				"min_count": map[string]any{"type": "integer", "minimum": 0, "default": 0},
+			}), []string{"environment_id"}), "annotations": readOnly,
 		},
 		{
-			"name": "get_operation_series", "description": "Mirror of the Flare operation page: stats and a time series for one environment namespace, narrowed to one operation by the service/target/operation selector from list_namespace_operations or get_namespace_overview (omit all three for the namespace total). Same windows, buckets, and series encoding as get_namespace_overview.",
-			"inputSchema": objectSchema(map[string]any{
-				"environment_id": integer,
-				"namespace":      map[string]any{"type": "string", "enum": []string{"web", "job", "db", "http", "cache", "view"}},
-				"hours":          map[string]any{"type": "integer", "enum": []int{1, 6, 24, 48, 168, 672}, "default": 24},
-				"service":        map[string]any{"type": "string", "maxLength": 255},
-				"target":         map[string]any{"type": "string", "maxLength": 255},
-				"operation":      map[string]any{"type": "string", "maxLength": 255},
-			}, []string{"environment_id", "namespace"}), "annotations": readOnly,
+			"name": "get_operation_series", "description": "Mirror of the Flare operation page: stats and a time series for one environment namespace, narrowed to one operation by the service/target/operation selector from list_namespace_operations or get_namespace_overview (omit all three for the namespace total). " + windowHelp + " " + seriesHelp,
+			"inputSchema": objectSchema(mergeProperties(scope, selector), []string{"environment_id", "namespace"}), "annotations": readOnly,
 		},
 	}
 }
@@ -228,48 +218,38 @@ type overviewArguments struct {
 	Limit          int     `json:"limit"`
 }
 
+// The metrics tools decode into the same scope / selector structs the CLI
+// binds its flags to, so both sides validate and encode identically.
 type namespaceArguments struct {
-	EnvironmentID int64  `json:"environment_id"`
-	Namespace     string `json:"namespace"`
-	Hours         int    `json:"hours"`
-	Sort          string `json:"sort"`
-	Direction     string `json:"direction"`
-	Limit         int    `json:"limit"`
-	Query         string `json:"q"`
+	scope
+	Sort      string `json:"sort"`
+	Direction string `json:"direction"`
+	Limit     int    `json:"limit"`
+	Query     string `json:"q"`
 }
 
 type namespaceOverviewArguments struct {
-	EnvironmentID int64  `json:"environment_id"`
-	Namespace     string `json:"namespace"`
-	Hours         int    `json:"hours"`
-	Limit         int    `json:"limit"`
-}
-
-type queryArguments struct {
-	EnvironmentID int64    `json:"environment_id"`
-	Hours         int      `json:"hours"`
-	Namespace     string   `json:"namespace"`
-	Service       string   `json:"service"`
-	Target        string   `json:"target"`
-	Operation     string   `json:"operation"`
-	GroupBy       []string `json:"group_by"`
-	Sort          string   `json:"sort"`
-	Direction     string   `json:"direction"`
-	Limit         int      `json:"limit"`
-	Series        bool     `json:"series"`
-	MinCount      int      `json:"min_count"`
+	scope
+	Limit int `json:"limit"`
 }
 
 type seriesArguments struct {
-	EnvironmentID int64  `json:"environment_id"`
-	Namespace     string `json:"namespace"`
-	Hours         int    `json:"hours"`
-	Service       string `json:"service"`
-	Target        string `json:"target"`
-	Operation     string `json:"operation"`
+	scope
+	selector
 }
 
-func callMCPTool(ctx context.Context, client *api.Client, call toolCall) (map[string]any, error) {
+type queryArguments struct {
+	scope
+	selector
+	GroupBy   []string `json:"group_by"`
+	Sort      string   `json:"sort"`
+	Direction string   `json:"direction"`
+	Limit     int      `json:"limit"`
+	Series    bool     `json:"series"`
+	MinCount  int      `json:"min_count"`
+}
+
+func callMCPTool(ctx context.Context, client *api.Client, call toolCall) (json.RawMessage, error) {
 	query := url.Values{}
 	path := ""
 	switch call.Name {
@@ -324,7 +304,7 @@ func callMCPTool(ctx context.Context, client *api.Client, call toolCall) (map[st
 		if len(arguments.EnvironmentIDs) == 0 || len(arguments.EnvironmentIDs) > 25 {
 			return nil, fmt.Errorf("environment_ids is required")
 		}
-		if !validHours(arguments.Hours) || !validSort(arguments.Sort) || arguments.Limit < 1 || arguments.Limit > 25 {
+		if !slices.Contains(allowedHours, arguments.Hours) || !slices.Contains(sorts, arguments.Sort) || arguments.Limit < 1 || arguments.Limit > 25 {
 			return nil, fmt.Errorf("invalid overview arguments")
 		}
 		values := make([]string, len(arguments.EnvironmentIDs))
@@ -337,18 +317,15 @@ func callMCPTool(ctx context.Context, client *api.Client, call toolCall) (map[st
 		query.Set("limit", strconv.Itoa(arguments.Limit))
 	case "list_namespace_operations":
 		path = "/api/v1/namespaces"
-		arguments := namespaceArguments{Hours: 24, Sort: "sum", Direction: "desc", Limit: 25}
+		arguments := namespaceArguments{scope: scope{Hours: 24}, Sort: "sum", Direction: "desc", Limit: 25}
 		if err := decodeStrictArguments(call.Arguments, &arguments); err != nil {
 			return nil, err
 		}
-		if arguments.EnvironmentID <= 0 || !validNamespace(arguments.Namespace) || !validHours(arguments.Hours) ||
-			!validSort(arguments.Sort) || (arguments.Direction != "asc" && arguments.Direction != "desc") ||
-			arguments.Limit < 1 || arguments.Limit > 100 || len(arguments.Query) > 255 {
+		if arguments.validate(true) != nil || !slices.Contains(sorts, arguments.Sort) || !slices.Contains(directions, arguments.Direction) ||
+			arguments.Limit < 1 || arguments.Limit > 100 || len(arguments.Query) > maxFilterLength {
 			return nil, fmt.Errorf("invalid namespace arguments")
 		}
-		query.Set("environment_id", strconv.FormatInt(arguments.EnvironmentID, 10))
-		query.Set("namespace", arguments.Namespace)
-		query.Set("hours", strconv.Itoa(arguments.Hours))
+		query = arguments.values()
 		query.Set("sort", arguments.Sort)
 		query.Set("direction", arguments.Direction)
 		query.Set("limit", strconv.Itoa(arguments.Limit))
@@ -357,43 +334,35 @@ func callMCPTool(ctx context.Context, client *api.Client, call toolCall) (map[st
 		}
 	case "get_namespace_overview":
 		path = "/api/v1/namespaces/overview"
-		arguments := namespaceOverviewArguments{Hours: 24, Limit: 10}
+		arguments := namespaceOverviewArguments{scope: scope{Hours: 24}, Limit: 10}
 		if err := decodeStrictArguments(call.Arguments, &arguments); err != nil {
 			return nil, err
 		}
-		if arguments.EnvironmentID <= 0 || !validNamespace(arguments.Namespace) || !validHours(arguments.Hours) ||
-			arguments.Limit < 1 || arguments.Limit > 25 {
+		if arguments.validate(true) != nil || arguments.Limit < 1 || arguments.Limit > maxSeriesLimit {
 			return nil, fmt.Errorf("invalid namespace overview arguments")
 		}
-		query.Set("environment_id", strconv.FormatInt(arguments.EnvironmentID, 10))
-		query.Set("namespace", arguments.Namespace)
-		query.Set("hours", strconv.Itoa(arguments.Hours))
+		query = arguments.values()
 		query.Set("limit", strconv.Itoa(arguments.Limit))
 	case "query_metrics":
 		path = "/api/v1/metrics/query"
-		arguments := queryArguments{Hours: 24, Sort: "sum", Direction: "desc", Limit: 10}
+		arguments := queryArguments{scope: scope{Hours: 24}, Sort: "sum", Direction: "desc", Limit: 10}
 		if err := decodeStrictArguments(call.Arguments, &arguments); err != nil {
 			return nil, err
 		}
-		maxLimit := 100
+		maxLimit := maxQueryLimit
 		if arguments.Series {
-			maxLimit = 25
+			maxLimit = maxSeriesLimit
 		}
-		if arguments.EnvironmentID <= 0 || !validHours(arguments.Hours) || (arguments.Namespace != "" && !validNamespace(arguments.Namespace)) ||
-			!validQuerySort(arguments.Sort) || (arguments.Direction != "asc" && arguments.Direction != "desc") ||
-			arguments.Limit < 1 || arguments.Limit > maxLimit || arguments.MinCount < 0 ||
-			len(arguments.Service) > 255 || len(arguments.Target) > 255 || len(arguments.Operation) > 255 || !validGroupBy(arguments.GroupBy) {
+		if arguments.scope.validate(false) != nil || arguments.selector.validate() != nil ||
+			!slices.Contains(querySorts, arguments.Sort) || !slices.Contains(directions, arguments.Direction) ||
+			arguments.Limit < 1 || arguments.Limit > maxLimit || arguments.MinCount < 0 || !validGroupBy(arguments.GroupBy) {
 			return nil, fmt.Errorf("invalid query arguments")
 		}
-		query.Set("environment_id", strconv.FormatInt(arguments.EnvironmentID, 10))
-		query.Set("hours", strconv.Itoa(arguments.Hours))
+		query = arguments.values()
+		arguments.selector.apply(query)
 		query.Set("sort", arguments.Sort)
 		query.Set("direction", arguments.Direction)
 		query.Set("limit", strconv.Itoa(arguments.Limit))
-		if arguments.Namespace != "" {
-			query.Set("namespace", arguments.Namespace)
-		}
-		addSelector(query, arguments.Service, arguments.Target, arguments.Operation)
 		if len(arguments.GroupBy) > 0 {
 			query.Set("group_by", strings.Join(arguments.GroupBy, ","))
 		}
@@ -405,23 +374,20 @@ func callMCPTool(ctx context.Context, client *api.Client, call toolCall) (map[st
 		}
 	case "get_operation_series":
 		path = "/api/v1/series"
-		arguments := seriesArguments{Hours: 24}
+		arguments := seriesArguments{scope: scope{Hours: 24}}
 		if err := decodeStrictArguments(call.Arguments, &arguments); err != nil {
 			return nil, err
 		}
-		if arguments.EnvironmentID <= 0 || !validNamespace(arguments.Namespace) || !validHours(arguments.Hours) ||
-			len(arguments.Service) > 255 || len(arguments.Target) > 255 || len(arguments.Operation) > 255 {
+		if arguments.scope.validate(true) != nil || arguments.selector.validate() != nil {
 			return nil, fmt.Errorf("invalid series arguments")
 		}
-		query.Set("environment_id", strconv.FormatInt(arguments.EnvironmentID, 10))
-		query.Set("namespace", arguments.Namespace)
-		query.Set("hours", strconv.Itoa(arguments.Hours))
-		addSelector(query, arguments.Service, arguments.Target, arguments.Operation)
+		query = arguments.values()
+		arguments.selector.apply(query)
 	default:
 		return nil, fmt.Errorf("unknown tool %q", call.Name)
 	}
 
-	var result map[string]any
+	var result json.RawMessage
 	if err := client.Get(ctx, path, query, &result); err != nil {
 		return nil, err
 	}
@@ -458,32 +424,12 @@ func decodeStrict(raw []byte, output any) error {
 	return nil
 }
 
-func validHours(hours int) bool {
-	return hours == 1 || hours == 6 || hours == 24 || hours == 48 || hours == 168 || hours == 672
-}
-
-func validSort(sort string) bool {
-	return sort == "count" || sort == "sum" || sort == "avg" || sort == "error_rate" || sort == "impact"
-}
-
-func validQuerySort(sort string) bool {
-	return sort == "count" || sort == "sum" || sort == "avg" || sort == "error_rate"
-}
-
-func validGroupBy(dimensions []string) bool {
-	seen := map[string]bool{}
-	for _, dimension := range dimensions {
-		if dimension != "namespace" && dimension != "service" && dimension != "target" && dimension != "operation" {
+// validGroupBy accepts a subset of the dimensions with no repeats.
+func validGroupBy(values []string) bool {
+	for index, value := range values {
+		if !slices.Contains(dimensions, value) || slices.Contains(values[:index], value) {
 			return false
 		}
-		if seen[dimension] {
-			return false
-		}
-		seen[dimension] = true
 	}
 	return true
-}
-
-func validNamespace(namespace string) bool {
-	return namespace == "web" || namespace == "job" || namespace == "db" || namespace == "http" || namespace == "cache" || namespace == "view"
 }

@@ -52,12 +52,19 @@ type Namespace struct {
 	Operations []Metric `json:"operations"`
 }
 
+// Window describes the time range a metrics response covers. Bucket is
+// minute (1h/6h), hour (24h-168h), or day (672h).
+type Window struct {
+	Hours       int    `json:"hours"`
+	Bucket      string `json:"bucket,omitempty"`
+	AsOf        string `json:"as_of"`
+	WindowStart string `json:"window_start"`
+	WindowEnd   string `json:"window_end"`
+}
+
 type Overview struct {
 	Environment Environment `json:"environment"`
-	Hours       int         `json:"hours"`
-	AsOf        string      `json:"as_of"`
-	WindowStart string      `json:"window_start"`
-	WindowEnd   string      `json:"window_end"`
+	Window
 	DataThrough *string     `json:"data_through"`
 	Namespaces  []Namespace `json:"namespaces"`
 }
@@ -80,21 +87,16 @@ type Series struct {
 	ErrorCount []int64 `json:"error_count"`
 }
 
-// SeriesEnvelope is shared by every series-shaped response. Bucket is minute
-// (1h/6h), hour (24h-168h), or day (672h). Buckets lists the bucket start times
-// every Series in the response is aligned to.
+// SeriesEnvelope is shared by every series-shaped response. Buckets lists the
+// bucket start times every Series in the response is aligned to.
 type SeriesEnvelope struct {
 	Environment Environment `json:"environment"`
 	Namespace   string      `json:"namespace"`
-	Hours       int         `json:"hours"`
-	Bucket      string      `json:"bucket"`
-	AsOf        string      `json:"as_of"`
-	WindowStart string      `json:"window_start"`
-	WindowEnd   string      `json:"window_end"`
-	Buckets     []string    `json:"buckets"`
-	DataThrough *string     `json:"data_through"`
-	Stats       Stats       `json:"stats"`
-	Series      Series      `json:"series"`
+	Window
+	Buckets     []string `json:"buckets"`
+	DataThrough *string  `json:"data_through"`
+	Stats       Stats    `json:"stats"`
+	Series      Series   `json:"series"`
 }
 
 type OperationSeriesResponse struct {
@@ -125,12 +127,8 @@ type QueryGroup struct {
 // QueryResponse is the generic GET /api/v1/metrics/query result. Buckets is
 // present only when series were requested.
 type QueryResponse struct {
-	Environment Environment  `json:"environment"`
-	Hours       int          `json:"hours"`
-	Bucket      string       `json:"bucket"`
-	AsOf        string       `json:"as_of"`
-	WindowStart string       `json:"window_start"`
-	WindowEnd   string       `json:"window_end"`
+	Environment Environment `json:"environment"`
+	Window
 	Buckets     []string     `json:"buckets,omitempty"`
 	Filter      Selector     `json:"filter"`
 	GroupBy     []string     `json:"group_by"`
@@ -171,10 +169,7 @@ type OverviewsResponse struct {
 type NamespaceResponse struct {
 	Environment Environment `json:"environment"`
 	Namespace   string      `json:"namespace"`
-	Hours       int         `json:"hours"`
-	AsOf        string      `json:"as_of"`
-	WindowStart string      `json:"window_start"`
-	WindowEnd   string      `json:"window_end"`
-	Operations  []Metric    `json:"operations"`
-	Pagination  Pagination  `json:"pagination"`
+	Window
+	Operations []Metric   `json:"operations"`
+	Pagination Pagination `json:"pagination"`
 }
