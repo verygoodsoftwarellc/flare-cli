@@ -2,8 +2,10 @@ package command
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -46,6 +48,29 @@ type namespaceInput struct {
 	Direction     string `json:"direction,omitempty"`
 	Limit         int    `json:"limit,omitempty"`
 	Query         string `json:"q,omitempty"`
+}
+
+// The series-shaped tools decode into the same scope / selector structs the
+// CLI binds its flags to, so both sides validate and encode identically.
+type namespaceOverviewInput struct {
+	scope
+	Limit int `json:"limit,omitempty"`
+}
+
+type seriesInput struct {
+	scope
+	selector
+}
+
+type queryInput struct {
+	scope
+	selector
+	GroupBy   []string `json:"group_by,omitempty"`
+	Sort      string   `json:"sort,omitempty"`
+	Direction string   `json:"direction,omitempty"`
+	Limit     int      `json:"limit,omitempty"`
+	Series    bool     `json:"series,omitempty"`
+	MinCount  int      `json:"min_count,omitempty"`
 }
 
 func newMCPCommand(options *rootOptions) *cobra.Command {
@@ -193,6 +218,110 @@ func newMCPServer(client *api.Client) *mcp.Server {
 		return nil, response, err
 	})
 
+	text := map[string]any{"type": "string", "maxLength": maxFilterLength}
+	hours := map[string]any{"type": "integer", "enum": allowedHours, "default": 24}
+	scopeProperties := map[string]any{
+		"environment_id": positiveInteger,
+		"namespace":      map[string]any{"type": "string", "enum": namespaces},
+		"hours":          hours,
+	}
+	selectorProperties := map[string]any{"service": text, "target": text, "operation": text}
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_namespace_overview",
+		Description: "Mirror of the Flare namespace page: stats and a time series for one environment namespace plus the top operations by sum and by count (default 10, max 25), each with its own series. " + windowHelp + " " + seriesHelp,
+		InputSchema: objectSchema(mergeProperties(scopeProperties, map[string]any{
+			"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": maxSeriesLimit, "default": 10},
+		}), []string{"environment_id", "namespace"}),
+		Annotations: annotations,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input namespaceOverviewInput) (*mcp.CallToolResult, api.NamespaceOverviewResponse, error) {
+		input.setDefaults()
+		if input.Limit == 0 {
+			input.Limit = 10
+		}
+		if err := input.validate(true); err != nil {
+			return nil, api.NamespaceOverviewResponse{}, err
+		}
+		if input.Limit < 1 || input.Limit > maxSeriesLimit {
+			return nil, api.NamespaceOverviewResponse{}, fmt.Errorf("limit must be between 1 and %d", maxSeriesLimit)
+		}
+		query := input.values()
+		query.Set("limit", strconv.Itoa(input.Limit))
+		var response api.NamespaceOverviewResponse
+		err := client.Get(ctx, "/api/v1/namespaces/overview", query, &response)
+		return nil, response, err
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "query_metrics",
+		Description: "Generic Flare metrics query; the other metrics tools are presets of it. Flare stores count, total ms, and error count per (namespace, service, target, operation). Filter on any of the four dimensions, group_by any subset, rank groups by count, sum, avg, or error_rate (use min_count with rate sorts), and set series=true to attach series (limit <= 25 with series). " + windowHelp + " " + seriesHelp + " " + dimensionHelp + " Examples: error rate per status class for one controller (filter namespace=web + target, group_by operation); slowest hosts (namespace=http, group_by service, sort avg); jobs failing most (namespace=job, group_by target, sort error_rate, min_count 10). Totals across namespaces are not additive.",
+		InputSchema: objectSchema(mergeProperties(mergeProperties(scopeProperties, selectorProperties), map[string]any{
+			"group_by":  map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": dimensions}, "maxItems": len(dimensions), "uniqueItems": true},
+			"sort":      map[string]any{"type": "string", "enum": querySorts, "default": "sum"},
+			"direction": map[string]any{"type": "string", "enum": directions, "default": "desc"},
+			"limit":     map[string]any{"type": "integer", "minimum": 1, "maximum": maxQueryLimit, "default": 10},
+			"series":    map[string]any{"type": "boolean", "default": false},
+			"min_count": map[string]any{"type": "integer", "minimum": 0, "default": 0},
+		}), []string{"environment_id"}),
+		Annotations: annotations,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input queryInput) (*mcp.CallToolResult, api.QueryResponse, error) {
+		input.setDefaults()
+		if input.Sort == "" {
+			input.Sort = "sum"
+		}
+		if input.Direction == "" {
+			input.Direction = "desc"
+		}
+		if input.Limit == 0 {
+			input.Limit = 10
+		}
+		if err := errors.Join(input.scope.validate(false), input.selector.validate()); err != nil {
+			return nil, api.QueryResponse{}, err
+		}
+		maxLimit := maxQueryLimit
+		if input.Series {
+			maxLimit = maxSeriesLimit
+		}
+		if !slices.Contains(querySorts, input.Sort) || !slices.Contains(directions, input.Direction) ||
+			input.Limit < 1 || input.Limit > maxLimit || input.MinCount < 0 || !validGroupBy(input.GroupBy) {
+			return nil, api.QueryResponse{}, fmt.Errorf("invalid query arguments")
+		}
+		query := input.values()
+		input.selector.apply(query)
+		query.Set("sort", input.Sort)
+		query.Set("direction", input.Direction)
+		query.Set("limit", strconv.Itoa(input.Limit))
+		if len(input.GroupBy) > 0 {
+			query.Set("group_by", strings.Join(input.GroupBy, ","))
+		}
+		if input.Series {
+			query.Set("series", "true")
+		}
+		if input.MinCount > 0 {
+			query.Set("min_count", strconv.Itoa(input.MinCount))
+		}
+		var response api.QueryResponse
+		err := client.Get(ctx, "/api/v1/metrics/query", query, &response)
+		return nil, response, err
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_operation_series",
+		Description: "Mirror of the Flare operation page: stats and a time series for one environment namespace, narrowed to one operation by the service/target/operation selector from list_namespace_operations or get_namespace_overview (omit all three for the namespace total). " + windowHelp + " " + seriesHelp,
+		InputSchema: objectSchema(mergeProperties(scopeProperties, selectorProperties), []string{"environment_id", "namespace"}),
+		Annotations: annotations,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input seriesInput) (*mcp.CallToolResult, api.OperationSeriesResponse, error) {
+		input.setDefaults()
+		if err := errors.Join(input.scope.validate(true), input.selector.validate()); err != nil {
+			return nil, api.OperationSeriesResponse{}, err
+		}
+		query := input.values()
+		input.selector.apply(query)
+		var response api.OperationSeriesResponse
+		err := client.Get(ctx, "/api/v1/series", query, &response)
+		return nil, response, err
+	})
+
 	return server
 }
 
@@ -290,13 +419,23 @@ func (input *namespaceInput) setDefaultsAndValidate() error {
 }
 
 func validHours(hours int) bool {
-	return hours == 1 || hours == 6 || hours == 24 || hours == 48 || hours == 168 || hours == 672
+	return slices.Contains(allowedHours, hours)
 }
 
 func validSort(sort string) bool {
-	return sort == "count" || sort == "sum" || sort == "avg" || sort == "error_rate" || sort == "impact"
+	return slices.Contains(sorts, sort)
 }
 
 func validNamespace(namespace string) bool {
-	return namespace == "web" || namespace == "job" || namespace == "db" || namespace == "http" || namespace == "cache" || namespace == "view"
+	return slices.Contains(namespaces, namespace)
+}
+
+// validGroupBy accepts a subset of the dimensions with no repeats.
+func validGroupBy(values []string) bool {
+	for index, value := range values {
+		if !slices.Contains(dimensions, value) || slices.Contains(values[:index], value) {
+			return false
+		}
+	}
+	return true
 }

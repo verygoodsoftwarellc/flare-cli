@@ -41,7 +41,16 @@ flare-cli project list --org 123
 flare-cli environment list --project 456
 flare-cli metrics overview --environment 789 --hours 24
 flare-cli metrics namespace --environment 789 --namespace web --sort sum
+flare-cli metrics namespace-overview --environment 789 --namespace job --hours 1
+flare-cli metrics series --environment 789 --namespace job --target EventJob --hours 1
+flare-cli metrics query --environment 789 --namespace web --target UsersController#index --group-by operation --sort count
 ```
+
+The metrics commands mirror the Flare web pages. `overview` is the environment page (per-namespace stats and top operations). `namespace-overview` is the namespace page: stats, a time series, and the top operations by sum and by count, each with its own series. `namespace` is the paginated operations table. `series` is the operation page: stats and one row per bucket for one operation, selected with `--service`, `--target`, and `--operation` from the `selector` values in `namespace --json`.
+
+`metrics query` is the generic form the others are presets of: filter on any of namespace, service, target, and operation, group by any subset of them with `--group-by`, rank with `--sort` and `--direction` (add `--min-count` for rate sorts), and attach series with `--series` (JSON output).
+
+Series use minute buckets for 1h and 6h windows, hour buckets for 24h to 168h, and day buckets for 672h. In JSON every series is `{count, sum, error_count}` arrays aligned to the response's `buckets` list; per-bucket averages are `sum / count`.
 
 Add `--json` to any data command for stable machine-readable output.
 
@@ -81,4 +90,4 @@ It has this shape:
 }
 ```
 
-It exposes only the five curated read tools corresponding to the CLI commands. It does not expose an arbitrary metrics query or any write operation.
+It exposes only the eight curated read tools corresponding to the CLI commands: the three catalog tools, the presets `get_environment_overviews`, `get_namespace_overview`, `list_namespace_operations`, and `get_operation_series`, and the generic `query_metrics`. It does not expose any write operation.

@@ -32,8 +32,8 @@ func TestMCPInitializesListsAndCallsCuratedReadTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Tools) != 5 {
-		t.Fatalf("expected 5 curated tools, got %d", len(listed.Tools))
+	if len(listed.Tools) != 8 {
+		t.Fatalf("expected 8 curated tools, got %d", len(listed.Tools))
 	}
 	for _, tool := range listed.Tools {
 		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
@@ -66,6 +66,9 @@ func TestMCPToolsCallOnlyExpectedReadEndpoints(t *testing.T) {
 		{path: "/api/v1/environments", query: "limit=100&project_id=9", response: `{"environments":[],"pagination":{"next":null,"previous":null}}`},
 		{path: "/api/v1/overviews", query: "environment_ids=18%2C19&hours=24&limit=5&sort=sum", response: `{"overviews":[]}`},
 		{path: "/api/v1/namespaces", query: "direction=desc&environment_id=18&hours=24&limit=25&namespace=web&sort=sum", response: `{"environment":{"id":18,"project_id":9,"name":"Production"},"namespace":"web","operations":[],"pagination":{"next":null,"previous":null}}`},
+		{path: "/api/v1/namespaces/overview", query: "environment_id=18&hours=1&limit=10&namespace=job", response: `{"environment":{"id":18,"project_id":9,"name":"Production"},"namespace":"job","hours":1,"bucket":"minute","as_of":"2026-10-07T20:31:50Z","window_start":"2026-10-07T19:31:00Z","window_end":"2026-10-07T20:31:50Z","buckets":[],"data_through":null,"stats":{"count":0,"sum":0,"avg":0,"error_count":0,"error_rate":0,"impact":0},"series":{"count":[],"sum":[],"error_count":[]},"top_by_sum":[],"top_by_count":[]}`},
+		{path: "/api/v1/metrics/query", query: "direction=desc&environment_id=18&group_by=operation&hours=24&limit=10&min_count=5&namespace=web&series=true&sort=count&target=UsersController%23index", response: `{"environment":{"id":18,"project_id":9,"name":"Production"},"hours":24,"bucket":"hour","as_of":"2026-10-07T20:31:50Z","window_start":"2026-10-06T20:00:00Z","window_end":"2026-10-07T20:31:50Z","buckets":[],"filter":{"namespace":"web","target":"UsersController#index"},"group_by":["operation"],"sort":"count","direction":"desc","limit":10,"min_count":5,"data_through":null,"total":{"count":0,"sum":0,"avg":0,"error_count":0,"error_rate":0},"groups":[]}`},
+		{path: "/api/v1/series", query: "environment_id=18&hours=24&namespace=job&target=EventJob", response: `{"environment":{"id":18,"project_id":9,"name":"Production"},"namespace":"job","selector":{"target":"EventJob"},"hours":24,"bucket":"hour","as_of":"2026-10-07T20:31:50Z","window_start":"2026-10-06T20:00:00Z","window_end":"2026-10-07T20:31:50Z","buckets":[],"data_through":null,"stats":{"count":0,"sum":0,"avg":0,"error_count":0,"error_rate":0},"series":{"count":[],"sum":[],"error_count":[]}}`},
 	}
 	requestIndex := 0
 	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -88,11 +91,20 @@ func TestMCPToolsCallOnlyExpectedReadEndpoints(t *testing.T) {
 		{Name: "list_environments", Arguments: map[string]any{"project_id": 9}},
 		{Name: "get_environment_overviews", Arguments: map[string]any{"environment_ids": []int{18, 19}}},
 		{Name: "list_namespace_operations", Arguments: map[string]any{"environment_id": 18, "namespace": "web"}},
+		{Name: "get_namespace_overview", Arguments: map[string]any{"environment_id": 18, "namespace": "job", "hours": 1}},
+		{Name: "query_metrics", Arguments: map[string]any{"environment_id": 18, "namespace": "web", "target": "UsersController#index", "group_by": []string{"operation"}, "sort": "count", "min_count": 5, "series": true}},
+		{Name: "get_operation_series", Arguments: map[string]any{"environment_id": 18, "namespace": "job", "target": "EventJob"}},
 	}
 	for _, call := range calls {
 		result, err := session.CallTool(context.Background(), call)
 		if err != nil || result.IsError {
-			t.Fatalf("call %s failed: result=%#v err=%v", call.Name, result, err)
+			text := ""
+			if result != nil && len(result.Content) > 0 {
+				if content, ok := result.Content[0].(*mcp.TextContent); ok {
+					text = content.Text
+				}
+			}
+			t.Fatalf("call %s failed: %s err=%v", call.Name, text, err)
 		}
 	}
 	if requestIndex != len(expected) {
@@ -111,6 +123,13 @@ func TestMCPRejectsInvalidArgumentsAndUnknownTools(t *testing.T) {
 		{name: "unknown argument", tool: "list_namespace_operations", arguments: map[string]any{"environment_id": 12, "namespace": "web", "unexpected": true}},
 		{name: "zero organization", tool: "list_projects", arguments: map[string]any{"organization_id": 0}},
 		{name: "duplicate environments", tool: "get_environment_overviews", arguments: map[string]any{"environment_ids": []int{1, 1}}},
+		{name: "unsupported hours", tool: "get_operation_series", arguments: map[string]any{"environment_id": 11, "namespace": "job", "hours": 2}},
+		{name: "unknown namespace", tool: "get_operation_series", arguments: map[string]any{"environment_id": 11, "namespace": "nope"}},
+		{name: "overview limit above series maximum", tool: "get_namespace_overview", arguments: map[string]any{"environment_id": 11, "namespace": "job", "limit": 26}},
+		{name: "unknown group_by", tool: "query_metrics", arguments: map[string]any{"environment_id": 11, "group_by": []string{"color"}}},
+		{name: "series limit above maximum", tool: "query_metrics", arguments: map[string]any{"environment_id": 11, "series": true, "limit": 26}},
+		{name: "impact is not a query sort", tool: "query_metrics", arguments: map[string]any{"environment_id": 11, "sort": "impact"}},
+		{name: "repeated group_by", tool: "query_metrics", arguments: map[string]any{"environment_id": 11, "group_by": []string{"target", "target"}}},
 		{name: "unknown tool", tool: "missing_tool", arguments: map[string]any{}},
 	}
 	for _, test := range tests {

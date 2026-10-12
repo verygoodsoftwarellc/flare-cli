@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -265,108 +264,6 @@ func newEnvironmentCommand(options *rootOptions) *cobra.Command {
 	list.Flags().Int64Var(&projectID, "project", 0, "filter by project ID")
 	parent.AddCommand(list)
 	return parent
-}
-
-func newMetricsCommand(options *rootOptions) *cobra.Command {
-	parent := &cobra.Command{Use: "metrics", Short: "Inspect performance metrics"}
-	parent.AddCommand(newOverviewCommand(options), newNamespaceCommand(options))
-	return parent
-}
-
-func newOverviewCommand(options *rootOptions) *cobra.Command {
-	var environmentIDs []int64
-	var hours, limit int
-	var sort string
-	command := &cobra.Command{
-		Use:   "overview",
-		Short: "Summarize one or more environments",
-		RunE: func(command *cobra.Command, _ []string) error {
-			if len(environmentIDs) == 0 {
-				return errors.New("at least one --environment is required")
-			}
-			client, err := options.client()
-			if err != nil {
-				return err
-			}
-			ids := make([]string, len(environmentIDs))
-			for index, id := range environmentIDs {
-				ids[index] = strconv.FormatInt(id, 10)
-			}
-			query := url.Values{
-				"environment_ids": {strings.Join(ids, ",")},
-				"hours":           {strconv.Itoa(hours)},
-				"sort":            {sort},
-				"limit":           {strconv.Itoa(limit)},
-			}
-			var response api.OverviewsResponse
-			if err := client.Get(command.Context(), "/api/v1/overviews", query, &response); err != nil {
-				return err
-			}
-			if options.json {
-				return writeJSON(options.output, response)
-			}
-			rows := [][]string{}
-			for _, overview := range response.Overviews {
-				for _, namespace := range overview.Namespaces {
-					rows = append(rows, []string{
-						overview.Environment.Name, namespace.Namespace, fmt.Sprint(namespace.Count),
-						formatMilliseconds(namespace.Sum), formatMilliseconds(int64(namespace.Avg)),
-						fmt.Sprintf("%.2f%%", namespace.ErrorRate),
-					})
-				}
-			}
-			return writeTable(options.output, []string{"ENVIRONMENT", "NAMESPACE", "COUNT", "SUM", "AVG", "ERROR"}, rows)
-		},
-	}
-	command.Flags().Int64SliceVarP(&environmentIDs, "environment", "e", nil, "environment ID (repeatable)")
-	command.Flags().IntVar(&hours, "hours", 24, "time window: 1, 6, 24, 48, 168, or 672")
-	command.Flags().StringVar(&sort, "sort", "sum", "rank operations by count, sum, avg, error_rate, or impact")
-	command.Flags().IntVar(&limit, "limit", 5, "top operations per namespace")
-	return command
-}
-
-func newNamespaceCommand(options *rootOptions) *cobra.Command {
-	var environmentID int64
-	var hours, limit int
-	var namespace, sort, direction, search string
-	command := &cobra.Command{
-		Use:   "namespace",
-		Short: "List operations in a namespace",
-		RunE: func(command *cobra.Command, _ []string) error {
-			if environmentID == 0 || namespace == "" {
-				return errors.New("--environment and --namespace are required")
-			}
-			client, err := options.client()
-			if err != nil {
-				return err
-			}
-			query := url.Values{
-				"environment_id": {strconv.FormatInt(environmentID, 10)}, "namespace": {namespace},
-				"hours": {strconv.Itoa(hours)}, "sort": {sort}, "direction": {direction},
-				"limit": {strconv.Itoa(limit)}, "q": {search},
-			}
-			var response api.NamespaceResponse
-			if err := client.Get(command.Context(), "/api/v1/namespaces", query, &response); err != nil {
-				return err
-			}
-			if options.json {
-				return writeJSON(options.output, response)
-			}
-			rows := make([][]string, 0, len(response.Operations))
-			for _, operation := range response.Operations {
-				rows = append(rows, []string{operation.Operation, fmt.Sprint(operation.Count), formatMilliseconds(operation.Sum), formatMilliseconds(int64(operation.Avg)), fmt.Sprintf("%.2f%%", operation.ErrorRate)})
-			}
-			return writeTable(options.output, []string{"OPERATION", "COUNT", "SUM", "AVG", "ERROR"}, rows)
-		},
-	}
-	command.Flags().Int64VarP(&environmentID, "environment", "e", 0, "environment ID")
-	command.Flags().StringVarP(&namespace, "namespace", "n", "", "web, job, db, http, cache, or view")
-	command.Flags().IntVar(&hours, "hours", 24, "time window")
-	command.Flags().StringVar(&sort, "sort", "sum", "sort field")
-	command.Flags().StringVar(&direction, "direction", "desc", "asc or desc")
-	command.Flags().StringVar(&search, "search", "", "filter operations")
-	command.Flags().IntVar(&limit, "limit", 25, "maximum operations")
-	return command
 }
 
 func writeJSON(writer io.Writer, value any) error {
