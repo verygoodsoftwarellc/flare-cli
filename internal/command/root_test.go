@@ -114,6 +114,7 @@ func TestEnvironmentRowsShowProjectAndOrganizationNames(t *testing.T) {
 
 func TestProjectListResolvesOrganizationsWithBulkRequests(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("FLARE_TOKEN", "flare_pat_test")
 	requests := map[string]int{}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -152,6 +153,7 @@ func TestProjectListResolvesOrganizationsWithBulkRequests(t *testing.T) {
 
 func TestEnvironmentListResolvesParentsWithBulkRequests(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("FLARE_TOKEN", "flare_pat_test")
 	requests := map[string]int{}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
