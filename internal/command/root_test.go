@@ -5,12 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -272,44 +269,38 @@ func TestUnauthorizedResponsesExplainHowToSignInAgain(t *testing.T) {
 		_, _ = writer.Write([]byte(`{"title":"Unauthorized","detail":"A valid personal access token is required."}`))
 	}))
 	defer server.Close()
-
-	path, err := config.Path()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	stored := fmt.Sprintf(`{"api_url":%q,"token":"flare_pat_expired","token_backend":"file","token_api_url":%q}`, server.URL, server.URL)
-	if err := os.WriteFile(path, []byte(stored), 0o600); err != nil {
+	stored := &config.Config{APIURL: server.URL, Token: "flare_pat_expired", TokenBackend: "file", TokenAPIURL: server.URL}
+	if err := stored.Save(); err != nil {
 		t.Fatal(err)
 	}
 
-	// A one-off --api-url is mentioned in words; FLARE_API_URL persists, so
+	const detail = "A valid personal access token is required. "
+	const sameURL = " with the same --api-url"
+	// A one-off --api-url is mentioned in words. FLARE_API_URL persists, so
 	// the plain command already signs in to the same server.
-	for _, flag := range []bool{true, false} {
-		login := "`flare-cli auth login`"
-		if flag {
-			login += " with the same --api-url"
-		} else {
-			t.Setenv("FLARE_API_URL", server.URL)
+	cases := []struct {
+		flag, envToken bool
+		want           string
+	}{
+		{flag: true, want: detail + "Run `flare-cli auth login`" + sameURL + " to sign in again."},
+		{flag: true, envToken: true, want: detail + "FLARE_TOKEN was rejected; replace it, or unset it and run `flare-cli auth login`" + sameURL + "."},
+		{want: detail + "Run `flare-cli auth login` to sign in again."},
+		{envToken: true, want: detail + "FLARE_TOKEN was rejected; replace it, or unset it and run `flare-cli auth login`."},
+	}
+	for _, test := range cases {
+		t.Setenv("FLARE_TOKEN", "")
+		if test.envToken {
+			t.Setenv("FLARE_TOKEN", "flare_pat_revoked")
 		}
-		cases := map[string]string{
-			"":                  "A valid personal access token is required. Run " + login + " to sign in again.",
-			"flare_pat_revoked": "A valid personal access token is required. FLARE_TOKEN was rejected; replace it, or unset it and run " + login + ".",
-		}
-		for envToken, want := range cases {
-			t.Setenv("FLARE_TOKEN", envToken)
-			for _, args := range [][]string{{"org", "list"}, {"auth", "status"}} {
-				if flag {
-					args = append(args, "--api-url", server.URL)
-				}
-				root := newRootCommand("flare-cli")
-				root.SetArgs(args)
-				err := root.ExecuteContext(context.Background())
-				if err == nil || err.Error() != want {
-					t.Fatalf("FLARE_TOKEN=%q %v: expected %q, got %v", envToken, args, want, err)
-				}
+		t.Setenv("FLARE_API_URL", server.URL)
+		for _, args := range [][]string{{"org", "list"}, {"auth", "status"}} {
+			if test.flag {
+				args = append(args, "--api-url", server.URL)
+			}
+			root := newRootCommand("flare-cli")
+			root.SetArgs(args)
+			if err := root.ExecuteContext(context.Background()); err == nil || err.Error() != test.want {
+				t.Fatalf("%v (FLARE_TOKEN set: %v): expected %q, got %v", args, test.envToken, test.want, err)
 			}
 		}
 	}

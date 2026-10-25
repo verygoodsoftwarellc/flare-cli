@@ -74,9 +74,10 @@ func (options *rootOptions) client() (*api.Client, error) {
 	client.Verbose = options.verbose
 	client.ErrWriter = options.errors
 	login := options.loginCommand()
-	client.AuthHint = fmt.Sprintf("Run %s to sign in again.", login)
 	if os.Getenv("FLARE_TOKEN") != "" {
 		client.AuthHint = fmt.Sprintf("FLARE_TOKEN was rejected; replace it, or unset it and run %s.", login)
+	} else {
+		client.AuthHint = fmt.Sprintf("Run %s to sign in again.", login)
 	}
 	return client, nil
 }
