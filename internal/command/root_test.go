@@ -5,14 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
+	"github.com/verygoodsoftwarellc/flare-cli/internal/config"
 )
 
 func TestCatalogHelpersFollowOpaqueNextCursors(t *testing.T) {
@@ -257,5 +261,56 @@ func TestQueryRejectsNegativeMinCount(t *testing.T) {
 	err := root.Execute()
 	if err == nil || !strings.Contains(err.Error(), "min-count") {
 		t.Fatalf("expected min-count rejection, got %v", err)
+	}
+}
+
+func TestUnauthorizedResponsesExplainHowToSignInAgain(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusUnauthorized)
+		_, _ = writer.Write([]byte(`{"title":"Unauthorized","detail":"A valid personal access token is required."}`))
+	}))
+	defer server.Close()
+
+	path, err := config.Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stored := fmt.Sprintf(`{"api_url":%q,"token":"flare_pat_expired","token_backend":"file","token_api_url":%q}`, server.URL, server.URL)
+	if err := os.WriteFile(path, []byte(stored), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A one-off --api-url is mentioned in words; FLARE_API_URL persists, so
+	// the plain command already signs in to the same server.
+	for _, flag := range []bool{true, false} {
+		login := "`flare-cli auth login`"
+		if flag {
+			login += " with the same --api-url"
+		} else {
+			t.Setenv("FLARE_API_URL", server.URL)
+		}
+		cases := map[string]string{
+			"":                  "A valid personal access token is required. Run " + login + " to sign in again.",
+			"flare_pat_revoked": "A valid personal access token is required. FLARE_TOKEN was rejected; replace it, or unset it and run " + login + ".",
+		}
+		for envToken, want := range cases {
+			t.Setenv("FLARE_TOKEN", envToken)
+			for _, args := range [][]string{{"org", "list"}, {"auth", "status"}} {
+				if flag {
+					args = append(args, "--api-url", server.URL)
+				}
+				root := newRootCommand("flare-cli")
+				root.SetArgs(args)
+				err := root.ExecuteContext(context.Background())
+				if err == nil || err.Error() != want {
+					t.Fatalf("FLARE_TOKEN=%q %v: expected %q, got %v", envToken, args, want, err)
+				}
+			}
+		}
 	}
 }

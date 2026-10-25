@@ -46,3 +46,25 @@ func TestGetExplainsRateLimit(t *testing.T) {
 		t.Fatalf("unexpected error %v", err)
 	}
 }
+
+func TestGetAddsAuthHintOnlyToUnauthorizedErrors(t *testing.T) {
+	status := http.StatusUnauthorized
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(status)
+		_, _ = writer.Write([]byte(`{"detail":"A valid personal access token is required.","request_id":"abc"}`))
+	}))
+	defer server.Close()
+
+	client := New(server.URL, "flare_pat_expired")
+	client.AuthHint = "Run `flare-cli auth login`."
+	err := client.Get(context.Background(), "/api/v1/organizations", nil, &map[string]any{})
+	if err == nil || err.Error() != "A valid personal access token is required. Run `flare-cli auth login`. (request abc)" {
+		t.Fatalf("unexpected unauthorized error %v", err)
+	}
+
+	status = http.StatusNotFound
+	err = client.Get(context.Background(), "/api/v1/organizations", nil, &map[string]any{})
+	if err == nil || strings.Contains(err.Error(), "auth login") {
+		t.Fatalf("hint should only follow 401s, got %v", err)
+	}
+}
