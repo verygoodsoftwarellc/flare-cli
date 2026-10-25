@@ -20,6 +20,9 @@ type Client struct {
 	HTTPClient *http.Client
 	Verbose    bool
 	ErrWriter  io.Writer
+	// AuthHint is appended to 401 errors (an expired or revoked token) so
+	// they say how to sign in again.
+	AuthHint string
 }
 
 type APIError struct {
@@ -28,6 +31,7 @@ type APIError struct {
 	Detail     string `json:"detail"`
 	RequestID  string `json:"request_id"`
 	RetryAfter string
+	Hint       string `json:"-"`
 }
 
 func (err *APIError) Error() string {
@@ -37,6 +41,9 @@ func (err *APIError) Error() string {
 	}
 	if err.Status == http.StatusTooManyRequests && err.RetryAfter != "" {
 		detail += "; retry in " + err.RetryAfter + "s"
+	}
+	if err.Hint != "" {
+		detail += " " + err.Hint
 	}
 	if err.RequestID != "" {
 		detail += " (request " + err.RequestID + ")"
@@ -77,6 +84,9 @@ func (client *Client) Get(ctx context.Context, path string, query url.Values, ou
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		apiError := &APIError{Status: response.StatusCode, RetryAfter: response.Header.Get("Retry-After")}
 		_ = json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(apiError)
+		if response.StatusCode == http.StatusUnauthorized {
+			apiError.Hint = client.AuthHint
+		}
 		return apiError
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 10<<20)).Decode(output); err != nil {

@@ -73,11 +73,27 @@ func (options *rootOptions) client() (*api.Client, error) {
 	client := api.New(settings.APIURL, token)
 	client.Verbose = options.verbose
 	client.ErrWriter = options.errors
+	login := options.loginCommand()
+	if os.Getenv("FLARE_TOKEN") != "" {
+		client.AuthHint = fmt.Sprintf("FLARE_TOKEN was rejected; replace it, or unset it and run %s.", login)
+	} else {
+		client.AuthHint = fmt.Sprintf("Run %s to sign in again.", login)
+	}
 	return client, nil
 }
 
 func (options *rootOptions) authenticationError(err error) error {
-	return fmt.Errorf("%w; run `%s auth login` or set FLARE_TOKEN", err, options.name)
+	return fmt.Errorf("%w; run %s or set FLARE_TOKEN", err, options.loginCommand())
+}
+
+// loginCommand names the sign-in command to suggest. A one-off --api-url is
+// mentioned in words rather than echoed, so there is nothing to shell-quote.
+func (options *rootOptions) loginCommand() string {
+	login := "`" + options.name + " auth login`"
+	if options.apiURL != "" {
+		login += " with the same --api-url"
+	}
+	return login
 }
 
 func newAuthCommand(options *rootOptions) *cobra.Command {
@@ -128,21 +144,14 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 		Use:   "status",
 		Short: "Show authentication status",
 		RunE: func(command *cobra.Command, _ []string) error {
-			settings, err := options.config()
+			client, err := options.client()
 			if err != nil {
 				return err
 			}
-			token, err := settings.TokenValue()
-			if err != nil {
-				return options.authenticationError(err)
-			}
-			client := api.New(settings.APIURL, token)
-			client.Verbose = options.verbose
-			client.ErrWriter = options.errors
 			if err := verifyAuthentication(command.Context(), client); err != nil {
 				return err
 			}
-			fmt.Fprintf(options.output, "Authenticated with %s\n", settings.APIURL)
+			fmt.Fprintf(options.output, "Authenticated with %s\n", client.BaseURL)
 			return nil
 		},
 	}

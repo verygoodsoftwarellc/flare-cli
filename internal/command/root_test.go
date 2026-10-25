@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
+	"github.com/verygoodsoftwarellc/flare-cli/internal/config"
 )
 
 func TestCatalogHelpersFollowOpaqueNextCursors(t *testing.T) {
@@ -257,5 +258,50 @@ func TestQueryRejectsNegativeMinCount(t *testing.T) {
 	err := root.Execute()
 	if err == nil || !strings.Contains(err.Error(), "min-count") {
 		t.Fatalf("expected min-count rejection, got %v", err)
+	}
+}
+
+func TestUnauthorizedResponsesExplainHowToSignInAgain(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusUnauthorized)
+		_, _ = writer.Write([]byte(`{"title":"Unauthorized","detail":"A valid personal access token is required."}`))
+	}))
+	defer server.Close()
+	stored := &config.Config{APIURL: server.URL, Token: "flare_pat_expired", TokenBackend: "file", TokenAPIURL: server.URL}
+	if err := stored.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	const detail = "A valid personal access token is required. "
+	const sameURL = " with the same --api-url"
+	// A one-off --api-url is mentioned in words. FLARE_API_URL persists, so
+	// the plain command already signs in to the same server.
+	cases := []struct {
+		flag, envToken bool
+		want           string
+	}{
+		{flag: true, want: detail + "Run `flare-cli auth login`" + sameURL + " to sign in again."},
+		{flag: true, envToken: true, want: detail + "FLARE_TOKEN was rejected; replace it, or unset it and run `flare-cli auth login`" + sameURL + "."},
+		{want: detail + "Run `flare-cli auth login` to sign in again."},
+		{envToken: true, want: detail + "FLARE_TOKEN was rejected; replace it, or unset it and run `flare-cli auth login`."},
+	}
+	for _, test := range cases {
+		t.Setenv("FLARE_TOKEN", "")
+		if test.envToken {
+			t.Setenv("FLARE_TOKEN", "flare_pat_revoked")
+		}
+		t.Setenv("FLARE_API_URL", server.URL)
+		for _, args := range [][]string{{"org", "list"}, {"auth", "status"}} {
+			if test.flag {
+				args = append(args, "--api-url", server.URL)
+			}
+			root := newRootCommand("flare-cli")
+			root.SetArgs(args)
+			if err := root.ExecuteContext(context.Background()); err == nil || err.Error() != test.want {
+				t.Fatalf("%v (FLARE_TOKEN set: %v): expected %q, got %v", args, test.envToken, test.want, err)
+			}
+		}
 	}
 }
