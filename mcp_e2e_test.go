@@ -24,6 +24,7 @@ func TestMCPCommandEndToEnd(t *testing.T) {
 	}))
 	defer apiServer.Close()
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("FLARE_API_URL", apiServer.URL)
 	t.Setenv("FLARE_TOKEN", "flare_pat_test")
 

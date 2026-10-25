@@ -12,6 +12,7 @@ import (
 
 func TestDeleteTokenReportsKeyringFailureAndClearsFallback(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	originalDelete := keyringDelete
 	keyringDelete = func(_, _ string) error { return errors.New("locked") }
 	t.Cleanup(func() { keyringDelete = originalDelete })
@@ -39,6 +40,7 @@ func TestDeleteTokenReportsKeyringFailureAndClearsFallback(t *testing.T) {
 
 func TestDeleteTokenAllowsMissingKeyringEntry(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	originalDelete := keyringDelete
 	keyringDelete = func(_, _ string) error { return keyring.ErrNotFound }
 	t.Cleanup(func() { keyringDelete = originalDelete })
@@ -71,6 +73,7 @@ func TestTokenValueHonorsExplicitFileBackend(t *testing.T) {
 
 func TestStoreTokenRecordsFileBackendWhenKeyringFails(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	originalSet := keyringSet
 	keyringSet = func(_, _, _ string) error { return errors.New("unavailable") }
 	t.Cleanup(func() { keyringSet = originalSet })
@@ -87,6 +90,7 @@ func TestStoreTokenRecordsFileBackendWhenKeyringFails(t *testing.T) {
 
 func TestLoadMigratesLegacyFileTokenBeforeConsultingKeyring(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	path, err := Path()
 	if err != nil {
 		t.Fatal(err)
@@ -125,6 +129,7 @@ func TestLoadMigratesLegacyFileTokenBeforeConsultingKeyring(t *testing.T) {
 
 func TestAPIURLOverrideDoesNotReuseFileCredential(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	settings := &Config{
 		APIURL:       "https://flare.am",
 		Token:        "flare_pat_production",
@@ -146,6 +151,7 @@ func TestAPIURLOverrideDoesNotReuseFileCredential(t *testing.T) {
 
 func TestAPIURLRequiresHTTPSExceptForLoopback(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	for _, value := range []string{"https://flare.example", "http://localhost:3200", "http://127.0.0.1:3200", "http://[::1]:3200"} {
 		if _, err := Load(value); err != nil {
 			t.Errorf("expected %s to be accepted: %v", value, err)
