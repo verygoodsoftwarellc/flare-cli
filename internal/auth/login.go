@@ -90,7 +90,7 @@ func Login(ctx context.Context, baseURL string, open func(string) error, status 
 	}
 	fmt.Fprintf(status, "Opening Flare in your browser. If it doesn't open, go to this URL on this computer:\n%s\n", authorizeURL)
 	if err := open(authorizeURL.String()); err != nil {
-		fmt.Fprintf(status, "Could not open a browser: %v\n", err)
+		fmt.Fprintf(status, "warning: could not open a browser: %v\n", err)
 	}
 
 	var callback callbackResult

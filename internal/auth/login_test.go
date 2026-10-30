@@ -39,15 +39,7 @@ func TestLoginUsesReadPurposeLoopbackAndPKCE(t *testing.T) {
 		if authorizeURL.Query().Get("purpose") != "read_api" || authorizeURL.Query().Get("code_challenge") == "" {
 			t.Fatalf("unexpected authorize URL %s", address)
 		}
-		callback := "http://127.0.0.1:" + authorizeURL.Query().Get("port") + "/callback?code=one-time-code&state=" + url.QueryEscape(authorizeURL.Query().Get("state"))
-		go func() {
-			response, err := http.Get(callback)
-			if err != nil {
-				t.Error(err)
-				return
-			}
-			_ = response.Body.Close()
-		}()
+		deliverCallback(t, authorizeURL)
 		return nil
 	}
 
@@ -69,26 +61,15 @@ func TestLoginKeepsWaitingWhenTheBrowserCannotOpen(t *testing.T) {
 	defer server.Close()
 
 	var status bytes.Buffer
+	var openedAddress string
 	failingOpen := func(address string) error {
-		if !strings.Contains(status.String(), address) {
-			t.Errorf("status %q does not contain the authorize URL %s", status.String(), address)
-		}
+		openedAddress = address
 		authorizeURL, err := url.Parse(address)
 		if err != nil {
 			return err
 		}
-		query := authorizeURL.Query()
-		callback := "http://127.0.0.1:" + query.Get("port") + "/callback?code=one-time-code&state=" + url.QueryEscape(query.Get("state"))
-		// The person opens the printed URL by hand after the browser fails.
-		go func() {
-			time.Sleep(50 * time.Millisecond)
-			response, err := http.Get(callback)
-			if err != nil {
-				t.Error(err)
-				return
-			}
-			_ = response.Body.Close()
-		}()
+		// Stands in for the person opening the printed URL by hand.
+		deliverCallback(t, authorizeURL)
 		return errors.New("xdg-open not found")
 	}
 
@@ -101,7 +82,19 @@ func TestLoginKeepsWaitingWhenTheBrowserCannotOpen(t *testing.T) {
 	if result.Token != "flare_pat_test" {
 		t.Fatalf("unexpected token %q", result.Token)
 	}
-	if !strings.Contains(status.String(), "xdg-open not found") {
-		t.Fatalf("status %q should explain the browser failure", status.String())
+	for _, want := range []string{openedAddress, "xdg-open not found"} {
+		if !strings.Contains(status.String(), want) {
+			t.Fatalf("status %q does not contain %q", status.String(), want)
+		}
 	}
+}
+
+func deliverCallback(t *testing.T, authorizeURL *url.URL) {
+	t.Helper()
+	query := authorizeURL.Query()
+	response, err := http.Get("http://127.0.0.1:" + query.Get("port") + "/callback?code=one-time-code&state=" + url.QueryEscape(query.Get("state")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
 }
