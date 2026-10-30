@@ -28,7 +28,7 @@ bundle exec flare status
 flare-cli auth login
 ```
 
-The CLI opens Flare in your browser, uses a loopback callback with PKCE, and stores the resulting personal access token in your operating system credential store. If the credential store is unavailable, it warns before falling back to a mode-0600 config file.
+The CLI opens Flare in your browser (and prints the URL in case it can't), uses a loopback callback with PKCE, and stores the resulting personal access token in your operating system credential store. If the credential store is unavailable, it warns before falling back to a mode-0600 config file.
 
 For automation, set `FLARE_TOKEN`. To use a self-hosted or development server, set `FLARE_API_URL`.
 To import an existing token without placing it in shell history or process arguments, pipe it to `flare-cli auth login --with-token`.
