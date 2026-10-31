@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -23,7 +24,10 @@ type ExchangeResponse struct {
 	Scopes    []string `json:"scopes"`
 }
 
-func Login(ctx context.Context, baseURL string, open func(string) error) (*ExchangeResponse, error) {
+// Login writes the authorize URL to status before trying the browser, and keeps
+// waiting if the browser can't open, because the URL only works while this
+// process is listening for the callback.
+func Login(ctx context.Context, baseURL string, open func(string) error, status io.Writer) (*ExchangeResponse, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("start callback listener: %w", err)
@@ -84,8 +88,9 @@ func Login(ctx context.Context, baseURL string, open func(string) error) (*Excha
 	if open == nil {
 		open = OpenBrowser
 	}
+	fmt.Fprintf(status, "Opening Flare in your browser. If it doesn't open, go to this URL on this computer:\n%s\n", authorizeURL)
 	if err := open(authorizeURL.String()); err != nil {
-		return nil, fmt.Errorf("open browser: %w (open %s manually)", err, authorizeURL.String())
+		fmt.Fprintf(status, "warning: could not open a browser: %v\n", err)
 	}
 
 	var callback callbackResult

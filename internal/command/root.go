@@ -120,8 +120,7 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 			} else {
 				ctx, cancel := context.WithTimeout(command.Context(), 3*time.Minute)
 				defer cancel()
-				fmt.Fprintln(options.errors, "Opening Flare in your browser…")
-				result, err := auth.Login(ctx, settings.APIURL, nil)
+				result, err := auth.Login(ctx, settings.APIURL, nil, options.errors)
 				if err != nil {
 					return err
 				}
