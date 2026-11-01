@@ -388,6 +388,10 @@ func newSeriesCommand(options *rootOptions) *cobra.Command {
 			if options.json {
 				return writeJSON(options.output, response)
 			}
+			fmt.Fprintf(options.output, "%s %s: %d requests, %s total, %s avg, %.2f%% errors (%d %s buckets, data through %s)\n\n",
+				response.Environment.Name, response.Namespace, response.Stats.Count, formatSum(response.Stats.Sum),
+				formatMilliseconds(response.Stats.Avg), response.Stats.ErrorRate,
+				len(response.Buckets), response.Bucket, dataThrough(response.DataThrough))
 			return writeTable(options.output, append([]string{"TIME"}, statsHeader...), seriesRows(response.Buckets, response.Series))
 		},
 	}
