@@ -10,31 +10,51 @@ import (
 	"github.com/zalando/go-keyring"
 )
 
-func TestDeleteTokenReportsKeyringFailureAndClearsFallback(t *testing.T) {
+func TestDeleteTokenReportsKeyringFailureForKeyringToken(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	originalDelete := keyringDelete
 	keyringDelete = func(_, _ string) error { return errors.New("locked") }
 	t.Cleanup(func() { keyringDelete = originalDelete })
 
-	settings := &Config{APIURL: "https://flare.test", Token: "flare_pat_fallback"}
+	settings := &Config{APIURL: "https://flare.test", TokenBackend: tokenBackendKeyring}
 	if err := settings.Save(); err != nil {
 		t.Fatal(err)
 	}
-	err := settings.DeleteToken()
+	_, err := settings.DeleteToken()
 	if err == nil || !strings.Contains(err.Error(), "credential store") {
 		t.Fatalf("expected credential-store error, got %v", err)
 	}
-	path, pathErr := Path()
-	if pathErr != nil {
-		t.Fatal(pathErr)
+}
+
+func TestDeleteTokenSucceedsForFileTokenWithoutCredentialStore(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	originalDelete := keyringDelete
+	keyringDelete = func(_, _ string) error { return errors.New("no credential store") }
+	t.Cleanup(func() { keyringDelete = originalDelete })
+
+	settings := &Config{APIURL: "https://flare.test", Token: "flare_pat_file", TokenBackend: tokenBackendFile, TokenAPIURL: "https://flare.test"}
+	skipped, err := settings.DeleteToken()
+	if err != nil || !skipped {
+		t.Fatalf("expected logout to succeed and flag the skipped store, got %v, %v", skipped, err)
 	}
-	data, readErr := os.ReadFile(path)
-	if readErr != nil {
-		t.Fatal(readErr)
+	if settings.Token != "" || settings.TokenBackend != "" {
+		t.Fatalf("token was not cleared: %#v", settings)
 	}
-	if strings.Contains(string(data), "flare_pat_fallback") {
-		t.Fatal("fallback token was not cleared")
+	if _, err := settings.DeleteToken(); err != nil {
+		t.Fatalf("expected a repeat logout to succeed, got %v", err)
+	}
+	path, err := Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "flare_pat_file") {
+		t.Fatal("file token was not cleared")
 	}
 }
 
@@ -46,7 +66,7 @@ func TestDeleteTokenAllowsMissingKeyringEntry(t *testing.T) {
 	t.Cleanup(func() { keyringDelete = originalDelete })
 
 	settings := &Config{APIURL: "https://flare.test"}
-	if err := settings.DeleteToken(); err != nil {
+	if _, err := settings.DeleteToken(); err != nil {
 		t.Fatal(err)
 	}
 }

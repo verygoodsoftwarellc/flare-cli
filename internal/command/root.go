@@ -162,8 +162,12 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := settings.DeleteToken(); err != nil {
+			storeSkipped, err := settings.DeleteToken()
+			if err != nil {
 				return err
+			}
+			if storeSkipped {
+				fmt.Fprintln(options.errors, "warning: OS credential store unavailable; any token saved there was not removed")
 			}
 			fmt.Fprintln(options.output, "Logged out")
 			return nil
