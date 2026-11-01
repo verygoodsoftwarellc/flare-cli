@@ -142,7 +142,10 @@ func selectorValue(s api.Selector, dimension string) string {
 
 // --- table rendering shared by every metrics command ---
 
-var statsHeader = []string{"COUNT", "SUM", "AVG", "ERROR"}
+var (
+	statsHeader     = []string{"COUNT", "SUM", "AVG", "ERROR"}
+	operationHeader = append(append([]string{"OPERATION"}, statsHeader...), "IMPACT")
+)
 
 func statsCells(count, sum int64, avg, errorRate float64) []string {
 	return []string{fmt.Sprint(count), formatMilliseconds(sum), formatMilliseconds(int64(avg)), fmt.Sprintf("%.2f%%", errorRate)}
@@ -155,10 +158,14 @@ func impactCell(impact *float64) string {
 	return fmt.Sprintf("%.1f%%", *impact)
 }
 
+func operationRow(name string, count, sum int64, avg, errorRate float64, impact *float64) []string {
+	return append(append([]string{name}, statsCells(count, sum, avg, errorRate)...), impactCell(impact))
+}
+
 func rankedRows(operations []api.RankedOperation) [][]string {
 	rows := make([][]string, 0, len(operations))
 	for _, operation := range operations {
-		rows = append(rows, append(append([]string{operation.Operation}, statsCells(operation.Count, operation.Sum, operation.Avg, operation.ErrorRate)...), impactCell(operation.Impact)))
+		rows = append(rows, operationRow(operation.Operation, operation.Count, operation.Sum, operation.Avg, operation.ErrorRate, operation.Impact))
 	}
 	return rows
 }
@@ -166,7 +173,7 @@ func rankedRows(operations []api.RankedOperation) [][]string {
 func overviewOperationRows(operations []api.Metric) [][]string {
 	rows := make([][]string, 0, len(operations))
 	for _, operation := range operations {
-		rows = append(rows, append(append([]string{operation.Operation}, statsCells(operation.Count, operation.Sum, operation.Avg, operation.ErrorRate)...), impactCell(&operation.Impact)))
+		rows = append(rows, operationRow(operation.Operation, operation.Count, operation.Sum, operation.Avg, operation.ErrorRate, &operation.Impact))
 	}
 	return rows
 }
@@ -243,14 +250,13 @@ func newOverviewCommand(options *rootOptions) *cobra.Command {
 			if err := writeTable(options.output, append([]string{"ENVIRONMENT", "NAMESPACE"}, statsHeader...), rows); err != nil {
 				return err
 			}
-			header := append(append([]string{"OPERATION"}, statsHeader...), "IMPACT")
 			for _, overview := range response.Overviews {
 				for _, namespace := range overview.Namespaces {
 					if len(namespace.Operations) == 0 {
 						continue
 					}
 					fmt.Fprintf(options.output, "\n%s %s: top operations by %s\n", overview.Environment.Name, namespace.Namespace, sort)
-					if err := writeTable(options.output, header, overviewOperationRows(namespace.Operations)); err != nil {
+					if err := writeTable(options.output, operationHeader, overviewOperationRows(namespace.Operations)); err != nil {
 						return err
 					}
 				}
@@ -337,13 +343,12 @@ func newNamespaceOverviewCommand(options *rootOptions) *cobra.Command {
 				response.Environment.Name, response.Namespace, response.Stats.Count, formatMilliseconds(response.Stats.Sum),
 				formatMilliseconds(int64(response.Stats.Avg)), response.Stats.ErrorRate, impactCell(response.Stats.Impact),
 				len(response.Buckets), response.Bucket, dataThrough(response.DataThrough))
-			header := append(append([]string{"OPERATION"}, statsHeader...), "IMPACT")
 			fmt.Fprintln(options.output, "Top by sum")
-			if err := writeTable(options.output, header, rankedRows(response.TopBySum)); err != nil {
+			if err := writeTable(options.output, operationHeader, rankedRows(response.TopBySum)); err != nil {
 				return err
 			}
 			fmt.Fprintln(options.output, "\nTop by count")
-			return writeTable(options.output, header, rankedRows(response.TopByCount))
+			return writeTable(options.output, operationHeader, rankedRows(response.TopByCount))
 		},
 	}
 	scope.bindFlags(command, strings.Join(namespaces, ", "))
