@@ -197,7 +197,7 @@ func newMCPServer(client *api.Client) *mcp.Server {
 			"direction":      map[string]any{"type": "string", "enum": []string{"asc", "desc"}, "default": "desc"},
 			"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
 			"q":              map[string]any{"type": "string", "maxLength": 255},
-			"cursor":         map[string]any{"type": "string"},
+			"cursor":         pagination["cursor"],
 		}, []string{"environment_id", "namespace"}),
 		Annotations: annotations,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input namespaceInput) (*mcp.CallToolResult, api.NamespaceResponse, error) {
