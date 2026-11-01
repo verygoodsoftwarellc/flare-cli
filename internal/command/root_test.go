@@ -14,6 +14,7 @@ import (
 
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/config"
+	"github.com/zalando/go-keyring"
 )
 
 func TestCatalogHelpersFollowOpaqueNextCursors(t *testing.T) {
@@ -356,6 +357,34 @@ func TestUnauthorizedResponsesExplainHowToSignInAgain(t *testing.T) {
 			root.SetArgs(args)
 			if err := root.ExecuteContext(context.Background()); err == nil || err.Error() != test.want {
 				t.Fatalf("%v (FLARE_TOKEN set: %v): expected %q, got %v", args, test.envToken, test.want, err)
+			}
+		}
+	}
+}
+
+func TestLoginAndLogoutWarnWhenFlareTokenStillWins(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	const warning = "FLARE_TOKEN is set and still takes priority"
+	run := func(input string, args ...string) (string, string) {
+		t.Helper()
+		output, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+		options := &rootOptions{name: "flare-cli", output: output, errors: stderr, input: strings.NewReader(input)}
+		command := newAuthCommand(options)
+		command.SetArgs(args)
+		if err := command.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		return output.String(), stderr.String()
+	}
+	keyring.MockInit()
+
+	for _, envToken := range []string{"", "flare_pat_env"} {
+		t.Setenv("FLARE_TOKEN", envToken)
+		for _, args := range [][]string{{"login", "--with-token"}, {"logout"}} {
+			output, stderr := run("flare_pat_test", args...)
+			if strings.Contains(stderr, warning) != (envToken != "") || strings.Contains(output, warning) {
+				t.Fatalf("%v with FLARE_TOKEN=%q: stdout %q stderr %q", args, envToken, output, stderr)
 			}
 		}
 	}

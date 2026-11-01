@@ -96,6 +96,14 @@ func (options *rootOptions) loginCommand() string {
 	return login
 }
 
+// warnIfFlareTokenSet follows login and logout, which change only stored
+// credentials: FLARE_TOKEN keeps winning in TokenValue.
+func (options *rootOptions) warnIfFlareTokenSet() {
+	if os.Getenv("FLARE_TOKEN") != "" {
+		fmt.Fprintln(options.errors, "warning: FLARE_TOKEN is set and still takes priority over stored credentials; commands keep using it until you unset it")
+	}
+}
+
 func newAuthCommand(options *rootOptions) *cobra.Command {
 	command := &cobra.Command{Use: "auth", Short: "Manage authentication"}
 	var withToken bool
@@ -134,6 +142,7 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 				path, _ := config.Path()
 				fmt.Fprintf(options.errors, "warning: OS credential store unavailable; token saved mode 0600 in %s\n", path)
 			}
+			options.warnIfFlareTokenSet()
 			fmt.Fprintf(options.output, "Authenticated with %s\n", settings.APIURL)
 			return nil
 		},
@@ -169,6 +178,7 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 			if storeSkipped {
 				fmt.Fprintln(options.errors, "warning: OS credential store unavailable; any token saved there was not removed")
 			}
+			options.warnIfFlareTokenSet()
 			fmt.Fprintln(options.output, "Logged out")
 			return nil
 		},
