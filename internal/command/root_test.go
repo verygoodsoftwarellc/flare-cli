@@ -250,6 +250,40 @@ func TestZeroImpactSurvivesJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestNamespaceCommandPagesWithCursor(t *testing.T) {
+	var cursors []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		cursors = append(cursors, request.URL.Query().Get("cursor"))
+		next := `"page-2"`
+		if request.URL.Query().Get("cursor") != "" {
+			next = "null"
+		}
+		_, _ = writer.Write([]byte(`{"environment":{"id":1,"project_id":1,"name":"Production"},"namespace":"web","operations":[],"pagination":{"next":` + next + `,"previous":null}}`))
+	}))
+	defer server.Close()
+	t.Setenv("FLARE_TOKEN", "flare_pat_test")
+
+	run := func(args ...string) string {
+		errOutput := &bytes.Buffer{}
+		options := &rootOptions{name: "flare-cli", apiURL: server.URL, output: &bytes.Buffer{}, errors: errOutput}
+		command := newNamespaceCommand(options)
+		command.SetArgs(append([]string{"-e", "1", "-n", "web"}, args...))
+		if err := command.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		return errOutput.String()
+	}
+	if hint := run(); !strings.Contains(hint, "--cursor page-2") {
+		t.Fatalf("first page should say how to get the next one, got %q", hint)
+	}
+	if hint := run("--cursor", "page-2"); hint != "" {
+		t.Fatalf("last page should not hint, got %q", hint)
+	}
+	if len(cursors) != 2 || cursors[0] != "" || cursors[1] != "page-2" {
+		t.Fatalf("cursors = %q", cursors)
+	}
+}
+
 func TestQueryRejectsNegativeMinCount(t *testing.T) {
 	root := newRootCommand("flare")
 	root.SetArgs([]string{"metrics", "query", "--environment", "1", "--min-count", "-1"})

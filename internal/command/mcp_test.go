@@ -112,6 +112,25 @@ func TestMCPToolsCallOnlyExpectedReadEndpoints(t *testing.T) {
 	}
 }
 
+func TestMCPNamespaceOperationsFollowsNextCursor(t *testing.T) {
+	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if got := request.URL.Query().Get("cursor"); got != "page-2" {
+			t.Errorf("cursor = %q, want page-2", got)
+		}
+		_, _ = writer.Write([]byte(`{"environment":{"id":18,"project_id":9,"name":"Production"},"namespace":"web","operations":[],"pagination":{"next":null,"previous":null}}`))
+	}))
+	defer apiServer.Close()
+	session := connectMCPClient(t, newMCPServer(api.New(apiServer.URL, "flare_pat_test")))
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "list_namespace_operations",
+		Arguments: map[string]any{"environment_id": 18, "namespace": "web", "cursor": "page-2"},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
 func TestMCPRejectsInvalidArgumentsAndUnknownTools(t *testing.T) {
 	session := connectMCPClient(t, newMCPServer(api.New("http://127.0.0.1:1", "flare_pat_test")))
 	tests := []struct {
