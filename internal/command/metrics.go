@@ -163,6 +163,14 @@ func rankedRows(operations []api.RankedOperation) [][]string {
 	return rows
 }
 
+func overviewOperationRows(operations []api.Metric) [][]string {
+	rows := make([][]string, 0, len(operations))
+	for _, operation := range operations {
+		rows = append(rows, append(append([]string{operation.Operation}, statsCells(operation.Count, operation.Sum, operation.Avg, operation.ErrorRate)...), impactCell(&operation.Impact)))
+	}
+	return rows
+}
+
 // seriesRows renders bucket-aligned arrays one bucket per row, deriving avg
 // and error rate the same way the server does for window totals.
 func seriesRows(buckets []string, series api.Series) [][]string {
@@ -232,13 +240,28 @@ func newOverviewCommand(options *rootOptions) *cobra.Command {
 					rows = append(rows, append([]string{overview.Environment.Name, namespace.Namespace}, statsCells(namespace.Count, namespace.Sum, namespace.Avg, namespace.ErrorRate)...))
 				}
 			}
-			return writeTable(options.output, append([]string{"ENVIRONMENT", "NAMESPACE"}, statsHeader...), rows)
+			if err := writeTable(options.output, append([]string{"ENVIRONMENT", "NAMESPACE"}, statsHeader...), rows); err != nil {
+				return err
+			}
+			header := append(append([]string{"OPERATION"}, statsHeader...), "IMPACT")
+			for _, overview := range response.Overviews {
+				for _, namespace := range overview.Namespaces {
+					if len(namespace.Operations) == 0 {
+						continue
+					}
+					fmt.Fprintf(options.output, "\n%s %s: top operations by %s\n", overview.Environment.Name, namespace.Namespace, sort)
+					if err := writeTable(options.output, header, overviewOperationRows(namespace.Operations)); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
 		},
 	}
 	command.Flags().Int64SliceVarP(&environmentIDs, "environment", "e", nil, "environment ID (repeatable)")
 	command.Flags().IntVar(&hours, "hours", 24, "time window: "+joinInts(allowedHours))
 	command.Flags().StringVar(&sort, "sort", "sum", "rank operations by "+strings.Join(sorts, ", "))
-	command.Flags().IntVar(&limit, "limit", 5, "top operations per namespace")
+	command.Flags().IntVar(&limit, "limit", 5, "top operations per namespace (1-25)")
 	return command
 }
 
