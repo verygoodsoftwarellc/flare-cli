@@ -21,7 +21,7 @@ func TestDeleteTokenReportsKeyringFailureForKeyringToken(t *testing.T) {
 	if err := settings.Save(); err != nil {
 		t.Fatal(err)
 	}
-	err := settings.DeleteToken()
+	_, err := settings.DeleteToken()
 	if err == nil || !strings.Contains(err.Error(), "credential store") {
 		t.Fatalf("expected credential-store error, got %v", err)
 	}
@@ -35,13 +35,14 @@ func TestDeleteTokenSucceedsForFileTokenWithoutCredentialStore(t *testing.T) {
 	t.Cleanup(func() { keyringDelete = originalDelete })
 
 	settings := &Config{APIURL: "https://flare.test", Token: "flare_pat_file", TokenBackend: tokenBackendFile, TokenAPIURL: "https://flare.test"}
-	if err := settings.DeleteToken(); err != nil {
-		t.Fatalf("expected logout to succeed, got %v", err)
+	skipped, err := settings.DeleteToken()
+	if err != nil || !skipped {
+		t.Fatalf("expected logout to succeed and flag the skipped store, got %v, %v", skipped, err)
 	}
 	if settings.Token != "" || settings.TokenBackend != "" {
 		t.Fatalf("token was not cleared: %#v", settings)
 	}
-	if err := settings.DeleteToken(); err != nil {
+	if _, err := settings.DeleteToken(); err != nil {
 		t.Fatalf("expected a repeat logout to succeed, got %v", err)
 	}
 	path, err := Path()
@@ -65,7 +66,7 @@ func TestDeleteTokenAllowsMissingKeyringEntry(t *testing.T) {
 	t.Cleanup(func() { keyringDelete = originalDelete })
 
 	settings := &Config{APIURL: "https://flare.test"}
-	if err := settings.DeleteToken(); err != nil {
+	if _, err := settings.DeleteToken(); err != nil {
 		t.Fatal(err)
 	}
 }

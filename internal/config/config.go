@@ -153,19 +153,23 @@ func (config *Config) StoreToken(token string) (fallback bool, err error) {
 	return true, config.Save()
 }
 
-// DeleteToken only reports a credential store failure when the token was stored
-// there. Otherwise a machine with no credential store could never log out.
-func (config *Config) DeleteToken() error {
+// DeleteToken fails if it can't remove a token stored in the credential store.
+// If the current token isn't stored there, an unreachable store only sets
+// storeSkipped, so a machine with no credential store can still log out.
+func (config *Config) DeleteToken() (storeSkipped bool, err error) {
 	storedInKeyring := config.TokenBackend == tokenBackendKeyring
 	keyringErr := keyringDelete(keyringService, config.APIURL)
 	config.Token = ""
 	config.TokenBackend = ""
 	config.TokenAPIURL = ""
 	if err := config.Save(); err != nil {
-		return err
+		return false, err
 	}
-	if keyringErr != nil && storedInKeyring && !errors.Is(keyringErr, keyring.ErrNotFound) {
-		return fmt.Errorf("remove token from OS credential store: %w", keyringErr)
+	if keyringErr == nil || errors.Is(keyringErr, keyring.ErrNotFound) {
+		return false, nil
 	}
-	return nil
+	if storedInKeyring {
+		return false, fmt.Errorf("remove token from OS credential store: %w", keyringErr)
+	}
+	return true, nil
 }
