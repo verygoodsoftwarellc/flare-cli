@@ -14,6 +14,7 @@ import (
 
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/config"
+	"github.com/zalando/go-keyring"
 )
 
 func TestCatalogHelpersFollowOpaqueNextCursors(t *testing.T) {
@@ -358,5 +359,39 @@ func TestUnauthorizedResponsesExplainHowToSignInAgain(t *testing.T) {
 				t.Fatalf("%v (FLARE_TOKEN set: %v): expected %q, got %v", args, test.envToken, test.want, err)
 			}
 		}
+	}
+}
+
+func TestLoginAndLogoutWarnWhenFlareTokenStillWins(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	const warning = "FLARE_TOKEN is set and still takes priority"
+	run := func(input string, args ...string) (string, string) {
+		t.Helper()
+		output, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+		options := &rootOptions{name: "flare-cli", output: output, errors: stderr, input: strings.NewReader(input)}
+		command := newAuthCommand(options)
+		command.SetArgs(args)
+		if err := command.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		return output.String(), stderr.String()
+	}
+	keyring.MockInit()
+
+	t.Setenv("FLARE_TOKEN", "")
+	if _, stderr := run("flare_pat_test", "login", "--with-token"); strings.Contains(stderr, warning) {
+		t.Fatalf("warned without FLARE_TOKEN: %s", stderr)
+	}
+	if _, stderr := run("", "logout"); strings.Contains(stderr, warning) {
+		t.Fatalf("warned without FLARE_TOKEN: %s", stderr)
+	}
+
+	t.Setenv("FLARE_TOKEN", "flare_pat_env")
+	if output, stderr := run("flare_pat_test", "login", "--with-token"); !strings.Contains(stderr, warning) || strings.Contains(output, warning) {
+		t.Fatalf("login: stdout %q stderr %q", output, stderr)
+	}
+	if output, stderr := run("", "logout"); !strings.Contains(stderr, warning) || strings.Contains(output, warning) {
+		t.Fatalf("logout: stdout %q stderr %q", output, stderr)
 	}
 }
