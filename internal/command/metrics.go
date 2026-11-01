@@ -170,7 +170,7 @@ func rankedRows(operations []api.RankedOperation) [][]string {
 	return rows
 }
 
-func overviewOperationRows(operations []api.Metric) [][]string {
+func metricRows(operations []api.Metric) [][]string {
 	rows := make([][]string, 0, len(operations))
 	for _, operation := range operations {
 		rows = append(rows, operationRow(operation.Operation, operation.Count, operation.Sum, operation.Avg, operation.ErrorRate, &operation.Impact))
@@ -256,7 +256,7 @@ func newOverviewCommand(options *rootOptions) *cobra.Command {
 						continue
 					}
 					fmt.Fprintf(options.output, "\n%s %s: top operations by %s\n", overview.Environment.Name, namespace.Namespace, sort)
-					if err := writeTable(options.output, operationHeader, overviewOperationRows(namespace.Operations)); err != nil {
+					if err := writeTable(options.output, operationHeader, metricRows(namespace.Operations)); err != nil {
 						return err
 					}
 				}
@@ -304,11 +304,7 @@ func newNamespaceCommand(options *rootOptions) *cobra.Command {
 			if response.Pagination.Next != nil {
 				fmt.Fprintf(options.errors, "More operations: run the same command with --cursor %s\n", *response.Pagination.Next)
 			}
-			rows := make([][]string, 0, len(response.Operations))
-			for _, operation := range response.Operations {
-				rows = append(rows, append([]string{operation.Operation}, statsCells(operation.Count, operation.Sum, operation.Avg, operation.ErrorRate)...))
-			}
-			return writeTable(options.output, append([]string{"OPERATION"}, statsHeader...), rows)
+			return writeTable(options.output, operationHeader, metricRows(response.Operations))
 		},
 	}
 	scope.bindFlags(command, strings.Join(namespaces, ", "))
