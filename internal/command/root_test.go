@@ -76,6 +76,27 @@ func TestAuthenticationErrorsUseInvokedExecutableName(t *testing.T) {
 	}
 }
 
+func TestStatsCellsShowDurationsLikeTheWebPages(t *testing.T) {
+	tests := []struct {
+		sum     int64
+		avg     float64
+		sumCell string
+		avgCell string
+	}{
+		{0, 0, "0ms", "0ms"},
+		{999, 1.99, "999ms", "2ms"},
+		{1_500, 1_500, "1.5s", "1.5s"},
+		{90_000, 90_000, "1.5m", "90.0s"},
+		{18_000_000, 98.72, "5.0h", "99ms"},
+	}
+	for _, test := range tests {
+		cells := statsCells(1, test.sum, test.avg, 0)
+		if cells[1] != test.sumCell || cells[2] != test.avgCell {
+			t.Errorf("statsCells(sum %d, avg %v) = %q, %q; want %q, %q", test.sum, test.avg, cells[1], cells[2], test.sumCell, test.avgCell)
+		}
+	}
+}
+
 func TestProjectRowsShowOrganizationNames(t *testing.T) {
 	projects := []api.Project{
 		{ID: 10, OrganizationID: 1, Name: "Storefront"},

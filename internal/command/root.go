@@ -394,9 +394,21 @@ func allEnvironments(ctx context.Context, client *api.Client, query url.Values) 
 	return response, nil
 }
 
-func formatMilliseconds(milliseconds int64) string {
+// formatMilliseconds and formatSum match how the Flare web pages show an
+// average and a total.
+func formatMilliseconds(milliseconds float64) string {
 	if milliseconds < 1_000 {
-		return fmt.Sprintf("%dms", milliseconds)
+		return fmt.Sprintf("%.0fms", milliseconds)
 	}
-	return fmt.Sprintf("%.1fs", float64(milliseconds)/1_000)
+	return fmt.Sprintf("%.1fs", milliseconds/1_000)
+}
+
+func formatSum(milliseconds int64) string {
+	switch {
+	case milliseconds < 60_000:
+		return formatMilliseconds(float64(milliseconds))
+	case milliseconds < 3_600_000:
+		return fmt.Sprintf("%.1fm", float64(milliseconds)/60_000)
+	}
+	return fmt.Sprintf("%.1fh", float64(milliseconds)/3_600_000)
 }
