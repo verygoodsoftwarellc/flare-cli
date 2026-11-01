@@ -86,7 +86,7 @@ func TestStatsCellsShowDurationsLikeTheWebPages(t *testing.T) {
 		{0, 0, "0ms", "0ms"},
 		{999, 1.99, "999ms", "2ms"},
 		{1_500, 1_500, "1.5s", "1.5s"},
-		{90_000, 999, "1.5m", "999ms"},
+		{90_000, 90_000, "1.5m", "90.0s"},
 		{18_000_000, 98.72, "5.0h", "99ms"},
 	}
 	for _, test := range tests {

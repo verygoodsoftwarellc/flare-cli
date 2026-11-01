@@ -145,7 +145,7 @@ func selectorValue(s api.Selector, dimension string) string {
 var statsHeader = []string{"COUNT", "SUM", "AVG", "ERROR"}
 
 func statsCells(count, sum int64, avg, errorRate float64) []string {
-	return []string{fmt.Sprint(count), formatMilliseconds(float64(sum)), formatMilliseconds(avg), fmt.Sprintf("%.2f%%", errorRate)}
+	return []string{fmt.Sprint(count), formatSum(sum), formatMilliseconds(avg), fmt.Sprintf("%.2f%%", errorRate)}
 }
 
 func impactCell(impact *float64) string {
@@ -311,7 +311,7 @@ func newNamespaceOverviewCommand(options *rootOptions) *cobra.Command {
 				return writeJSON(options.output, response)
 			}
 			fmt.Fprintf(options.output, "%s %s: %d requests, %s total, %s avg, %.2f%% errors, %s of environment time (%d %s buckets, data through %s)\n\n",
-				response.Environment.Name, response.Namespace, response.Stats.Count, formatMilliseconds(float64(response.Stats.Sum)),
+				response.Environment.Name, response.Namespace, response.Stats.Count, formatSum(response.Stats.Sum),
 				formatMilliseconds(response.Stats.Avg), response.Stats.ErrorRate, impactCell(response.Stats.Impact),
 				len(response.Buckets), response.Bucket, dataThrough(response.DataThrough))
 			header := append(append([]string{"OPERATION"}, statsHeader...), "IMPACT")
@@ -407,7 +407,7 @@ func newQueryCommand(options *rootOptions) *cobra.Command {
 				return writeJSON(options.output, response)
 			}
 			fmt.Fprintf(options.output, "%s: %d requests, %s total, %s avg, %.2f%% errors (data through %s)\n",
-				response.Environment.Name, response.Total.Count, formatMilliseconds(float64(response.Total.Sum)),
+				response.Environment.Name, response.Total.Count, formatSum(response.Total.Sum),
 				formatMilliseconds(response.Total.Avg), response.Total.ErrorRate, dataThrough(response.DataThrough))
 			if len(response.Groups) == 0 {
 				return nil
