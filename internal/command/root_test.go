@@ -379,19 +379,13 @@ func TestLoginAndLogoutWarnWhenFlareTokenStillWins(t *testing.T) {
 	}
 	keyring.MockInit()
 
-	t.Setenv("FLARE_TOKEN", "")
-	if _, stderr := run("flare_pat_test", "login", "--with-token"); strings.Contains(stderr, warning) {
-		t.Fatalf("warned without FLARE_TOKEN: %s", stderr)
-	}
-	if _, stderr := run("", "logout"); strings.Contains(stderr, warning) {
-		t.Fatalf("warned without FLARE_TOKEN: %s", stderr)
-	}
-
-	t.Setenv("FLARE_TOKEN", "flare_pat_env")
-	if output, stderr := run("flare_pat_test", "login", "--with-token"); !strings.Contains(stderr, warning) || strings.Contains(output, warning) {
-		t.Fatalf("login: stdout %q stderr %q", output, stderr)
-	}
-	if output, stderr := run("", "logout"); !strings.Contains(stderr, warning) || strings.Contains(output, warning) {
-		t.Fatalf("logout: stdout %q stderr %q", output, stderr)
+	for _, envToken := range []string{"", "flare_pat_env"} {
+		t.Setenv("FLARE_TOKEN", envToken)
+		for _, args := range [][]string{{"login", "--with-token"}, {"logout"}} {
+			output, stderr := run("flare_pat_test", args...)
+			if strings.Contains(stderr, warning) != (envToken != "") || strings.Contains(output, warning) {
+				t.Fatalf("%v with FLARE_TOKEN=%q: stdout %q stderr %q", args, envToken, output, stderr)
+			}
+		}
 	}
 }
