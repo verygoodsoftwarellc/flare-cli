@@ -14,6 +14,13 @@ This installs `flare-cli` into `$(go env GOPATH)/bin`. Make sure that directory 
 flare-cli --help
 ```
 
+Without Go, releases after v0.3.0 attach prebuilt binaries for macOS, Linux, and Windows (`flare-cli_<os>_<arch>.tar.gz`, with `checksums.txt`) to the [releases page](https://github.com/verygoodsoftwarellc/flare-cli/releases). For example, on an Apple Silicon Mac:
+
+```sh
+curl -fsSL https://github.com/verygoodsoftwarellc/flare-cli/releases/latest/download/flare-cli_darwin_arm64.tar.gz | tar -xz flare-cli
+sudo mv flare-cli /usr/local/bin/
+```
+
 `flare-cli` is the standalone CLI for Flare's API. The Flare Ruby gem has separate, project-local commands for configuring and diagnosing a Rails application:
 
 ```sh
