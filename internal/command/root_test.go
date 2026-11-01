@@ -76,6 +76,22 @@ func TestAuthenticationErrorsUseInvokedExecutableName(t *testing.T) {
 	}
 }
 
+func TestFormatMillisecondsMatchesWebPages(t *testing.T) {
+	tests := map[float64]string{
+		0:          "0ms",
+		1.99:       "2ms",
+		999:        "999ms",
+		1_500:      "1.5s",
+		90_000:     "1.5m",
+		18_000_000: "5.0h",
+	}
+	for input, want := range tests {
+		if got := formatMilliseconds(input); got != want {
+			t.Errorf("formatMilliseconds(%v) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestProjectRowsShowOrganizationNames(t *testing.T) {
 	projects := []api.Project{
 		{ID: 10, OrganizationID: 1, Name: "Storefront"},

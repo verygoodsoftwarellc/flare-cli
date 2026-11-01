@@ -390,9 +390,15 @@ func allEnvironments(ctx context.Context, client *api.Client, query url.Values) 
 	return response, nil
 }
 
-func formatMilliseconds(milliseconds int64) string {
-	if milliseconds < 1_000 {
-		return fmt.Sprintf("%dms", milliseconds)
+// formatMilliseconds matches how the Flare web pages show durations.
+func formatMilliseconds(milliseconds float64) string {
+	switch {
+	case milliseconds < 1_000:
+		return fmt.Sprintf("%.0fms", milliseconds)
+	case milliseconds < 60_000:
+		return fmt.Sprintf("%.1fs", milliseconds/1_000)
+	case milliseconds < 3_600_000:
+		return fmt.Sprintf("%.1fm", milliseconds/60_000)
 	}
-	return fmt.Sprintf("%.1fs", float64(milliseconds)/1_000)
+	return fmt.Sprintf("%.1fh", milliseconds/3_600_000)
 }
