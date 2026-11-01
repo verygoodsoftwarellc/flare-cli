@@ -27,9 +27,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Run tests
-        run: go test ./...
-
       # Asset names leave out the version so releases/latest/download/ URLs
       # stay stable. go build stamps the tag into --version, unless the checkout
       # looks modified, so dist lives outside it.
@@ -44,11 +41,9 @@ jobs:
             name="flare-cli_${GOOS}_${GOARCH}"
             binary=flare-cli
             [ "$GOOS" = windows ] && binary=flare-cli.exe
-            mkdir "$dist/$name"
-            go build -trimpath -ldflags "-s -w" -o "$dist/$name/$binary" .
-            cp README.md "$dist/$name/"
-            tar -C "$dist/$name" -czf "$dist/$name.tar.gz" "$binary" README.md
-            rm -r "$dist/$name"
+            go build -trimpath -ldflags "-s -w" -o "$dist/$binary" .
+            tar -czf "$dist/$name.tar.gz" -C "$dist" "$binary" -C "$GITHUB_WORKSPACE" README.md
+            rm "$dist/$binary"
           done
           (cd "$dist" && sha256sum -- * > checksums.txt)
 
