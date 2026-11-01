@@ -274,7 +274,7 @@ func newOverviewCommand(options *rootOptions) *cobra.Command {
 func newNamespaceCommand(options *rootOptions) *cobra.Command {
 	var scope scope
 	var limit int
-	var sort, direction, search string
+	var sort, direction, search, cursor string
 	command := &cobra.Command{
 		Use:   "namespace",
 		Short: "List operations in a namespace",
@@ -291,12 +291,18 @@ func newNamespaceCommand(options *rootOptions) *cobra.Command {
 			query.Set("direction", direction)
 			query.Set("limit", strconv.Itoa(limit))
 			query.Set("q", search)
+			if cursor != "" {
+				query.Set("cursor", cursor)
+			}
 			var response api.NamespaceResponse
 			if err := client.Get(command.Context(), "/api/v1/namespaces", query, &response); err != nil {
 				return err
 			}
 			if options.json {
 				return writeJSON(options.output, response)
+			}
+			if response.Pagination.Next != nil {
+				fmt.Fprintf(options.errors, "More operations: run the same command with --cursor %s\n", *response.Pagination.Next)
 			}
 			rows := make([][]string, 0, len(response.Operations))
 			for _, operation := range response.Operations {
@@ -310,6 +316,7 @@ func newNamespaceCommand(options *rootOptions) *cobra.Command {
 	command.Flags().StringVar(&direction, "direction", "desc", "asc or desc")
 	command.Flags().StringVar(&search, "search", "", "filter operations")
 	command.Flags().IntVar(&limit, "limit", 25, "maximum operations")
+	command.Flags().StringVar(&cursor, "cursor", "", "next page, from a previous run with the same flags (pagination.next with --json)")
 	return command
 }
 
@@ -363,7 +370,7 @@ func newSeriesCommand(options *rootOptions) *cobra.Command {
 		Use:   "series",
 		Short: "Time series for a namespace or one operation",
 		Long: "Mirror of the Flare operation page: stats and one row per bucket (count, sum, avg, error rate). " +
-			windowHelp + " Narrow to one operation with the selector fields shown by `flare metrics namespace --json`.",
+			windowHelp + " Narrow to one operation with the selector fields shown by `flare-cli metrics namespace --json`.",
 		RunE: func(command *cobra.Command, _ []string) error {
 			if err := errors.Join(scope.validate(true), selector.validate()); err != nil {
 				return err

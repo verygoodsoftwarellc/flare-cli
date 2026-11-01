@@ -48,6 +48,7 @@ type namespaceInput struct {
 	Direction     string `json:"direction,omitempty"`
 	Limit         int    `json:"limit,omitempty"`
 	Query         string `json:"q,omitempty"`
+	Cursor        string `json:"cursor,omitempty"`
 }
 
 // The series-shaped tools decode into the same scope / selector structs the
@@ -187,7 +188,7 @@ func newMCPServer(client *api.Client) *mcp.Server {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_namespace_operations",
-		Description: "List top operations for one Flare environment namespace.",
+		Description: "List top operations for one Flare environment namespace. For the next page, pass pagination.next as cursor with the same other arguments.",
 		InputSchema: objectSchema(map[string]any{
 			"environment_id": positiveInteger,
 			"namespace":      map[string]any{"type": "string", "enum": []string{"web", "job", "db", "http", "cache", "view"}},
@@ -196,6 +197,7 @@ func newMCPServer(client *api.Client) *mcp.Server {
 			"direction":      map[string]any{"type": "string", "enum": []string{"asc", "desc"}, "default": "desc"},
 			"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
 			"q":              map[string]any{"type": "string", "maxLength": 255},
+			"cursor":         pagination["cursor"],
 		}, []string{"environment_id", "namespace"}),
 		Annotations: annotations,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input namespaceInput) (*mcp.CallToolResult, api.NamespaceResponse, error) {
@@ -212,6 +214,9 @@ func newMCPServer(client *api.Client) *mcp.Server {
 		}
 		if input.Query != "" {
 			query.Set("q", input.Query)
+		}
+		if input.Cursor != "" {
+			query.Set("cursor", input.Cursor)
 		}
 		var response api.NamespaceResponse
 		err := client.Get(ctx, "/api/v1/namespaces", query, &response)
