@@ -96,6 +96,8 @@ func newMCPServer(client *api.Client) *mcp.Server {
 	annotations := readOnlyToolAnnotations()
 	positiveInteger := map[string]any{"type": "integer", "minimum": 1}
 	hours := map[string]any{"type": "integer", "enum": allowedHours, "default": 24}
+	namespace := map[string]any{"type": "string", "enum": namespaces}
+	sort := map[string]any{"type": "string", "enum": sorts, "default": "sum"}
 	pagination := map[string]any{
 		"cursor": map[string]any{"type": "string"},
 		"limit":  map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "default": 100},
@@ -164,7 +166,7 @@ func newMCPServer(client *api.Client) *mcp.Server {
 		InputSchema: objectSchema(map[string]any{
 			"environment_ids": map[string]any{"type": "array", "items": positiveInteger, "minItems": 1, "maxItems": 25, "uniqueItems": true},
 			"hours":           hours,
-			"sort":            map[string]any{"type": "string", "enum": sorts, "default": "sum"},
+			"sort":            sort,
 			"limit":           map[string]any{"type": "integer", "minimum": 1, "maximum": 25, "default": 5},
 		}, []string{"environment_ids"}),
 		Annotations: annotations,
@@ -192,9 +194,9 @@ func newMCPServer(client *api.Client) *mcp.Server {
 		Description: "List top operations for one Flare environment namespace. For the next page, pass pagination.next as cursor with the same other arguments.",
 		InputSchema: objectSchema(map[string]any{
 			"environment_id": positiveInteger,
-			"namespace":      map[string]any{"type": "string", "enum": namespaces},
+			"namespace":      namespace,
 			"hours":          hours,
-			"sort":           map[string]any{"type": "string", "enum": sorts, "default": "sum"},
+			"sort":           sort,
 			"direction":      map[string]any{"type": "string", "enum": directions, "default": "desc"},
 			"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
 			"q":              map[string]any{"type": "string", "maxLength": 255},
@@ -227,7 +229,7 @@ func newMCPServer(client *api.Client) *mcp.Server {
 	text := map[string]any{"type": "string", "maxLength": maxFilterLength}
 	scopeProperties := map[string]any{
 		"environment_id": positiveInteger,
-		"namespace":      map[string]any{"type": "string", "enum": namespaces},
+		"namespace":      namespace,
 		"hours":          hours,
 	}
 	selectorProperties := map[string]any{"service": text, "target": text, "operation": text}
