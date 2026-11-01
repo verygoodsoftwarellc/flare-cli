@@ -8,6 +8,35 @@ import (
 	"testing"
 )
 
+func TestSeriesTableShowsWindowStats(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{"environment":{"id":1,"project_id":1,"name":"Production"},"namespace":"job","hours":1,"bucket":"minute",
+			"buckets":["2026-11-01T12:00:00Z","2026-11-01T12:01:00Z"],"data_through":"2026-11-01T12:01:00Z",
+			"selector":{"target":"EventJob"},
+			"stats":{"count":4,"sum":90000,"avg":22500,"error_count":1,"error_rate":25},
+			"series":{"count":[3,1],"sum":[60000,30000],"error_count":[1,0]}}`))
+	}))
+	defer server.Close()
+	t.Setenv("FLARE_TOKEN", "flare_pat_test")
+
+	output := &bytes.Buffer{}
+	options := &rootOptions{name: "flare-cli", apiURL: server.URL, output: output, errors: &bytes.Buffer{}}
+	command := newSeriesCommand(options)
+	command.SetArgs([]string{"-e", "1", "-n", "job", "--target", "EventJob", "--hours", "1"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	text := output.String()
+	want := "Production job: 4 requests, 1.5m total, 22.5s avg, 25.00% errors (2 minute buckets, data through 2026-11-01T12:01:00Z)\n\nTIME"
+	if !strings.HasPrefix(text, want) {
+		t.Fatalf("want prefix %q in:\n%s", want, text)
+	}
+	if !strings.Contains(text, "2026-11-01T12:01:00Z  1") {
+		t.Fatalf("missing bucket row in:\n%s", text)
+	}
+}
+
 func TestOverviewTableShowsTopOperations(t *testing.T) {
 	var query string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

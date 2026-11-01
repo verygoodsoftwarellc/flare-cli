@@ -151,6 +151,10 @@ func statsCells(count, sum int64, avg, errorRate float64) []string {
 	return []string{fmt.Sprint(count), formatSum(sum), formatMilliseconds(avg), fmt.Sprintf("%.2f%%", errorRate)}
 }
 
+func statsSummary(stats api.Stats) string {
+	return fmt.Sprintf("%d requests, %s total, %s avg, %.2f%% errors", stats.Count, formatSum(stats.Sum), formatMilliseconds(stats.Avg), stats.ErrorRate)
+}
+
 func impactCell(impact *float64) string {
 	if impact == nil {
 		return ""
@@ -346,9 +350,8 @@ func newNamespaceOverviewCommand(options *rootOptions) *cobra.Command {
 			if options.json {
 				return writeJSON(options.output, response)
 			}
-			fmt.Fprintf(options.output, "%s %s: %d requests, %s total, %s avg, %.2f%% errors, %s of environment time (%d %s buckets, data through %s)\n\n",
-				response.Environment.Name, response.Namespace, response.Stats.Count, formatSum(response.Stats.Sum),
-				formatMilliseconds(response.Stats.Avg), response.Stats.ErrorRate, impactCell(response.Stats.Impact),
+			fmt.Fprintf(options.output, "%s %s: %s, %s of environment time (%d %s buckets, data through %s)\n\n",
+				response.Environment.Name, response.Namespace, statsSummary(response.Stats), impactCell(response.Stats.Impact),
 				len(response.Buckets), response.Bucket, dataThrough(response.DataThrough))
 			fmt.Fprintln(options.output, "Top by sum")
 			if err := writeTable(options.output, operationHeader, rankedRows(response.TopBySum)); err != nil {
@@ -388,6 +391,9 @@ func newSeriesCommand(options *rootOptions) *cobra.Command {
 			if options.json {
 				return writeJSON(options.output, response)
 			}
+			fmt.Fprintf(options.output, "%s %s: %s (%d %s buckets, data through %s)\n\n",
+				response.Environment.Name, response.Namespace, statsSummary(response.Stats),
+				len(response.Buckets), response.Bucket, dataThrough(response.DataThrough))
 			return writeTable(options.output, append([]string{"TIME"}, statsHeader...), seriesRows(response.Buckets, response.Series))
 		},
 	}
@@ -441,9 +447,8 @@ func newQueryCommand(options *rootOptions) *cobra.Command {
 			if options.json {
 				return writeJSON(options.output, response)
 			}
-			fmt.Fprintf(options.output, "%s: %d requests, %s total, %s avg, %.2f%% errors (data through %s)\n",
-				response.Environment.Name, response.Total.Count, formatSum(response.Total.Sum),
-				formatMilliseconds(response.Total.Avg), response.Total.ErrorRate, dataThrough(response.DataThrough))
+			fmt.Fprintf(options.output, "%s: %s (data through %s)\n",
+				response.Environment.Name, statsSummary(response.Total.Stats), dataThrough(response.DataThrough))
 			if len(response.Groups) == 0 {
 				return nil
 			}
