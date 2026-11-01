@@ -38,6 +38,22 @@ func TestDeleteTokenReportsKeyringFailureAndClearsFallback(t *testing.T) {
 	}
 }
 
+func TestDeleteTokenSucceedsForFileTokenWithoutCredentialStore(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	originalDelete := keyringDelete
+	keyringDelete = func(_, _ string) error { return errors.New("no credential store") }
+	t.Cleanup(func() { keyringDelete = originalDelete })
+
+	settings := &Config{APIURL: "https://flare.test", Token: "flare_pat_file", TokenBackend: tokenBackendFile, TokenAPIURL: "https://flare.test"}
+	if err := settings.DeleteToken(); err != nil {
+		t.Fatalf("expected logout to succeed, got %v", err)
+	}
+	if settings.Token != "" || settings.TokenBackend != "" {
+		t.Fatalf("token was not cleared: %#v", settings)
+	}
+}
+
 func TestDeleteTokenAllowsMissingKeyringEntry(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())

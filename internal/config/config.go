@@ -134,9 +134,6 @@ func (config *Config) TokenValue() (string, error) {
 	if err == nil {
 		return token, nil
 	}
-	if config.TokenBackend == "" && config.Token != "" {
-		return config.Token, nil
-	}
 	return "", errors.New("not authenticated")
 }
 
@@ -156,7 +153,10 @@ func (config *Config) StoreToken(token string) (fallback bool, err error) {
 	return true, config.Save()
 }
 
+// DeleteToken ignores credential store failures when the token lives in the
+// config file: that's the machine where the store was unavailable at login.
 func (config *Config) DeleteToken() error {
+	storedInFile := config.TokenBackend == tokenBackendFile
 	keyringErr := keyringDelete(keyringService, config.APIURL)
 	config.Token = ""
 	config.TokenBackend = ""
@@ -164,7 +164,7 @@ func (config *Config) DeleteToken() error {
 	if err := config.Save(); err != nil {
 		return err
 	}
-	if keyringErr != nil && !errors.Is(keyringErr, keyring.ErrNotFound) {
+	if keyringErr != nil && !storedInFile && !errors.Is(keyringErr, keyring.ErrNotFound) {
 		return fmt.Errorf("remove token from OS credential store: %w", keyringErr)
 	}
 	return nil
