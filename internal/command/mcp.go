@@ -95,6 +95,9 @@ func newMCPServer(client *api.Client) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "flare", Version: version.Current()}, nil)
 	annotations := readOnlyToolAnnotations()
 	positiveInteger := map[string]any{"type": "integer", "minimum": 1}
+	hours := map[string]any{"type": "integer", "enum": allowedHours, "default": 24}
+	namespace := map[string]any{"type": "string", "enum": namespaces}
+	sort := map[string]any{"type": "string", "enum": sorts, "default": "sum"}
 	pagination := map[string]any{
 		"cursor": map[string]any{"type": "string"},
 		"limit":  map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "default": 100},
@@ -162,8 +165,8 @@ func newMCPServer(client *api.Client) *mcp.Server {
 		Description: "Get bulk performance summaries for up to 25 Flare environments.",
 		InputSchema: objectSchema(map[string]any{
 			"environment_ids": map[string]any{"type": "array", "items": positiveInteger, "minItems": 1, "maxItems": 25, "uniqueItems": true},
-			"hours":           map[string]any{"type": "integer", "enum": []int{1, 6, 24, 48, 168, 672}, "default": 24},
-			"sort":            map[string]any{"type": "string", "enum": []string{"count", "sum", "avg", "error_rate", "impact"}, "default": "sum"},
+			"hours":           hours,
+			"sort":            sort,
 			"limit":           map[string]any{"type": "integer", "minimum": 1, "maximum": 25, "default": 5},
 		}, []string{"environment_ids"}),
 		Annotations: annotations,
@@ -191,10 +194,10 @@ func newMCPServer(client *api.Client) *mcp.Server {
 		Description: "List top operations for one Flare environment namespace. For the next page, pass pagination.next as cursor with the same other arguments.",
 		InputSchema: objectSchema(map[string]any{
 			"environment_id": positiveInteger,
-			"namespace":      map[string]any{"type": "string", "enum": []string{"web", "job", "db", "http", "cache", "view"}},
-			"hours":          map[string]any{"type": "integer", "enum": []int{1, 6, 24, 48, 168, 672}, "default": 24},
-			"sort":           map[string]any{"type": "string", "enum": []string{"count", "sum", "avg", "error_rate", "impact"}, "default": "sum"},
-			"direction":      map[string]any{"type": "string", "enum": []string{"asc", "desc"}, "default": "desc"},
+			"namespace":      namespace,
+			"hours":          hours,
+			"sort":           sort,
+			"direction":      map[string]any{"type": "string", "enum": directions, "default": "desc"},
 			"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
 			"q":              map[string]any{"type": "string", "maxLength": 255},
 			"cursor":         pagination["cursor"],
@@ -224,10 +227,9 @@ func newMCPServer(client *api.Client) *mcp.Server {
 	})
 
 	text := map[string]any{"type": "string", "maxLength": maxFilterLength}
-	hours := map[string]any{"type": "integer", "enum": allowedHours, "default": 24}
 	scopeProperties := map[string]any{
 		"environment_id": positiveInteger,
-		"namespace":      map[string]any{"type": "string", "enum": namespaces},
+		"namespace":      namespace,
 		"hours":          hours,
 	}
 	selectorProperties := map[string]any{"service": text, "target": text, "operation": text}
@@ -396,7 +398,7 @@ func (input *overviewInput) setDefaultsAndValidate() error {
 		}
 		seen[id] = struct{}{}
 	}
-	if !validHours(input.Hours) || !validSort(input.Sort) || input.Limit < 1 || input.Limit > 25 {
+	if !slices.Contains(allowedHours, input.Hours) || !slices.Contains(sorts, input.Sort) || input.Limit < 1 || input.Limit > 25 {
 		return fmt.Errorf("invalid overview arguments")
 	}
 	return nil
@@ -415,24 +417,12 @@ func (input *namespaceInput) setDefaultsAndValidate() error {
 	if input.Limit == 0 {
 		input.Limit = 25
 	}
-	if input.EnvironmentID <= 0 || !validNamespace(input.Namespace) || !validHours(input.Hours) ||
-		!validSort(input.Sort) || (input.Direction != "asc" && input.Direction != "desc") ||
+	if input.EnvironmentID <= 0 || !slices.Contains(namespaces, input.Namespace) || !slices.Contains(allowedHours, input.Hours) ||
+		!slices.Contains(sorts, input.Sort) || !slices.Contains(directions, input.Direction) ||
 		input.Limit < 1 || input.Limit > 100 || utf8.RuneCountInString(input.Query) > 255 {
 		return fmt.Errorf("invalid namespace arguments")
 	}
 	return nil
-}
-
-func validHours(hours int) bool {
-	return slices.Contains(allowedHours, hours)
-}
-
-func validSort(sort string) bool {
-	return slices.Contains(sorts, sort)
-}
-
-func validNamespace(namespace string) bool {
-	return slices.Contains(namespaces, namespace)
 }
 
 // validGroupBy accepts a subset of the dimensions with no repeats.
