@@ -70,3 +70,27 @@ func TestOverviewTableShowsTopOperations(t *testing.T) {
 		t.Fatalf("empty namespace got a section:\n%s", text)
 	}
 }
+
+func TestNamespaceTableShowsImpact(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{"environment":{"id":1,"project_id":1,"name":"Production"},"namespace":"web","operations":[
+			{"operation":"UsersController#index","impact":42.5,"count":4,"sum":400,"avg":100,"error_rate":25}
+		],"pagination":{"next":null,"previous":null}}`))
+	}))
+	defer server.Close()
+	t.Setenv("FLARE_TOKEN", "flare_pat_test")
+
+	output := &bytes.Buffer{}
+	options := &rootOptions{name: "flare-cli", apiURL: server.URL, output: output, errors: &bytes.Buffer{}}
+	command := newNamespaceCommand(options)
+	command.SetArgs([]string{"-e", "1", "-n", "web", "--sort", "impact"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{"IMPACT", "42.5%"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("missing %q in:\n%s", want, output)
+		}
+	}
+}
