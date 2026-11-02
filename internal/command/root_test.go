@@ -65,6 +65,40 @@ func TestLoginDoesNotAcceptTokenInProcessArguments(t *testing.T) {
 	}
 }
 
+func TestStrayArgumentsAreErrors(t *testing.T) {
+	// If a case stops being rejected it runs for real, so nothing here may reach
+	// the developer's stored credentials or a real server.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("FLARE_API_URL", "http://127.0.0.1:1")
+	t.Setenv("FLARE_TOKEN", "flare_pat_test")
+	keyring.MockInit()
+	run := func(args ...string) error {
+		root := newRootCommand("flare-cli")
+		root.SetOut(io.Discard)
+		root.SetArgs(args)
+		return root.Execute()
+	}
+	for _, args := range [][]string{
+		{"metrics", "oveview"},
+		{"auth", "statsu"},
+		{"env", "lst"},
+		{"project", "list", "123"},
+		{"metrics", "overview", "789"},
+		{"auth", "logout", "extra"},
+		{"completion", "zhs"},
+	} {
+		if err := run(args...); err == nil || !strings.Contains(err.Error(), "unknown command") {
+			t.Errorf("%v: err = %v", args, err)
+		}
+	}
+	for _, args := range [][]string{{"metrics"}, {"auth"}, {"env"}, {"metrics", "overview", "--help"}, {"help", "metrics"}, {"completion", "bash"}} {
+		if err := run(args...); err != nil {
+			t.Errorf("%v: err = %v", args, err)
+		}
+	}
+}
+
 func TestAuthenticationErrorsUseInvokedExecutableName(t *testing.T) {
 	root := newRootCommand("flare-cli")
 	if root.Use != "flare-cli" {
