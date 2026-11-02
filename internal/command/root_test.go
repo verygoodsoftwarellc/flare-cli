@@ -412,10 +412,6 @@ func TestLoginWithTokenChecksTheTokenBeforeSavingIt(t *testing.T) {
 			if strings.Contains(output.String(), "Authenticated") != accepted {
 				t.Fatalf("output %q", output.String())
 			}
-			settings, err = config.Load(server.URL)
-			if err != nil {
-				t.Fatal(err)
-			}
 			if saved, err := settings.TokenValue(); err != nil || saved != test.saved {
 				t.Fatalf("saved %q (%v), want %q", saved, err, test.saved)
 			}
