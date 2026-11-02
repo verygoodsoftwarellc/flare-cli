@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/config"
 	"github.com/zalando/go-keyring"
@@ -94,6 +95,34 @@ func TestStatsCellsShowDurationsLikeTheWebPages(t *testing.T) {
 		cells := statsCells(1, test.sum, test.avg, 0)
 		if cells[1] != test.sumCell || cells[2] != test.avgCell {
 			t.Errorf("statsCells(sum %d, avg %v) = %q, %q; want %q, %q", test.sum, test.avg, cells[1], cells[2], test.sumCell, test.avgCell)
+		}
+	}
+}
+
+func TestEmptyListsAreEmptyArraysInJSON(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("FLARE_TOKEN", "flare_pat_test")
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		key := strings.TrimPrefix(request.URL.Path, "/api/v1/")
+		_ = json.NewEncoder(writer).Encode(map[string]any{key: []any{}, "pagination": map[string]any{"next": nil, "previous": nil}})
+	}))
+	defer server.Close()
+
+	for name, key := range map[string]string{"org": "organizations", "project": "projects", "environment": "environments"} {
+		output := &bytes.Buffer{}
+		options := &rootOptions{name: "flare-cli", apiURL: server.URL, json: true, output: output, errors: &bytes.Buffer{}}
+		command := map[string]*cobra.Command{"org": newOrganizationCommand(options), "project": newProjectCommand(options), "environment": newEnvironmentCommand(options)}[name]
+		command.SetArgs([]string{"list"})
+		if err := command.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		var response map[string]any
+		if err := json.Unmarshal(output.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if list, ok := response[key].([]any); !ok || len(list) != 0 {
+			t.Errorf("%s list --json: %s = %#v, want []", name, key, response[key])
 		}
 	}
 }
