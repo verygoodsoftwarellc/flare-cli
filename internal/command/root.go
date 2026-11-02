@@ -125,6 +125,9 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 				if !strings.HasPrefix(token, "flare_pat_") {
 					return errors.New("stdin did not contain a Flare personal access token")
 				}
+				if err := verifyAuthentication(command.Context(), api.New(settings.APIURL, token)); err != nil {
+					return fmt.Errorf("token not saved: %w", err)
+				}
 			} else {
 				ctx, cancel := context.WithTimeout(command.Context(), 3*time.Minute)
 				defer cancel()

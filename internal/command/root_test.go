@@ -362,9 +362,75 @@ func TestUnauthorizedResponsesExplainHowToSignInAgain(t *testing.T) {
 	}
 }
 
+func TestLoginWithTokenChecksTheTokenBeforeSavingIt(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		saved  string
+	}{
+		{name: "accepted", status: http.StatusOK, saved: "flare_pat_new"},
+		{name: "accepted without org scope", status: http.StatusForbidden, saved: "flare_pat_new"},
+		{name: "rejected keeps the old token", status: http.StatusUnauthorized, saved: "flare_pat_old"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			t.Setenv("FLARE_TOKEN", "")
+			keyring.MockInit()
+			var sent string
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				sent = request.Header.Get("Authorization")
+				writer.WriteHeader(test.status)
+				_, _ = writer.Write([]byte(`{"detail":"A valid personal access token is required."}`))
+			}))
+			defer server.Close()
+			settings, err := config.Load(server.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := settings.StoreToken("flare_pat_old"); err != nil {
+				t.Fatal(err)
+			}
+
+			output := &bytes.Buffer{}
+			options := &rootOptions{name: "flare-cli", apiURL: server.URL, output: output, errors: &bytes.Buffer{}, input: strings.NewReader("flare_pat_new\n")}
+			command := newAuthCommand(options)
+			command.SetArgs([]string{"login", "--with-token"})
+			err = command.Execute()
+
+			if sent != "Bearer flare_pat_new" {
+				t.Fatalf("checked %q, want the piped token", sent)
+			}
+			accepted := test.saved == "flare_pat_new"
+			if accepted && err != nil {
+				t.Fatal(err)
+			}
+			if !accepted && (err == nil || !strings.Contains(err.Error(), "token not saved: A valid personal access token is required.")) {
+				t.Fatalf("err = %v", err)
+			}
+			if strings.Contains(output.String(), "Authenticated") != accepted {
+				t.Fatalf("output %q", output.String())
+			}
+			settings, err = config.Load(server.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if saved, err := settings.TokenValue(); err != nil || saved != test.saved {
+				t.Fatalf("saved %q (%v), want %q", saved, err, test.saved)
+			}
+		})
+	}
+}
+
 func TestLoginAndLogoutWarnWhenFlareTokenStillWins(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	t.Setenv("FLARE_API_URL", server.URL)
 	const warning = "FLARE_TOKEN is set and still takes priority"
 	run := func(input string, args ...string) (string, string) {
 		t.Helper()
