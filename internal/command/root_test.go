@@ -64,6 +64,33 @@ func TestLoginDoesNotAcceptTokenInProcessArguments(t *testing.T) {
 	}
 }
 
+func TestStrayArgumentsAreErrors(t *testing.T) {
+	run := func(args ...string) (string, error) {
+		output := &bytes.Buffer{}
+		root := newRootCommand("flare-cli")
+		root.SetOut(output)
+		root.SetArgs(args)
+		return output.String(), root.Execute()
+	}
+	for _, args := range [][]string{
+		{"metrics", "oveview"},
+		{"auth", "statsu"},
+		{"env", "lst"},
+		{"project", "list", "123"},
+		{"metrics", "overview", "789"},
+		{"auth", "logout", "extra"},
+	} {
+		if _, err := run(args...); err == nil || !strings.Contains(err.Error(), "unknown command") {
+			t.Errorf("%v: err = %v", args, err)
+		}
+	}
+	for _, args := range [][]string{{"metrics"}, {"auth"}, {"env"}, {"metrics", "overview", "--help"}} {
+		if _, err := run(args...); err != nil {
+			t.Errorf("%v: err = %v", args, err)
+		}
+	}
+}
+
 func TestAuthenticationErrorsUseInvokedExecutableName(t *testing.T) {
 	root := newRootCommand("flare-cli")
 	if root.Use != "flare-cli" {

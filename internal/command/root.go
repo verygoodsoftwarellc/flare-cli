@@ -54,7 +54,23 @@ func newRootCommand(name string) *cobra.Command {
 		newMetricsCommand(options),
 		newMCPCommand(options),
 	)
+	rejectStrayArgs(command)
 	return command
+}
+
+// rejectStrayArgs turns typos and leftover arguments under subcommands into
+// errors. Cobra only checks them at the root: below it, `metrics oveview`
+// prints help and exits 0, and `project list 123` ignores the 123.
+func rejectStrayArgs(parent *cobra.Command) {
+	for _, command := range parent.Commands() {
+		if command.Args == nil {
+			command.Args = cobra.NoArgs
+		}
+		if !command.Runnable() {
+			command.RunE = func(command *cobra.Command, _ []string) error { return command.Help() }
+		}
+		rejectStrayArgs(command)
+	}
 }
 
 func (options *rootOptions) config() (*config.Config, error) {
