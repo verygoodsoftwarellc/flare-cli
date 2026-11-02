@@ -356,7 +356,7 @@ func nameOrID(name string, id int64) string {
 }
 
 func allOrganizations(ctx context.Context, client *api.Client) (api.OrganizationsResponse, error) {
-	response := api.OrganizationsResponse{}
+	response := api.OrganizationsResponse{Organizations: []api.Organization{}}
 	query := url.Values{"limit": {"100"}}
 	for {
 		var page api.OrganizationsResponse
@@ -373,7 +373,7 @@ func allOrganizations(ctx context.Context, client *api.Client) (api.Organization
 }
 
 func allProjects(ctx context.Context, client *api.Client, query url.Values) (api.ProjectsResponse, error) {
-	response := api.ProjectsResponse{}
+	response := api.ProjectsResponse{Projects: []api.Project{}}
 	for {
 		var page api.ProjectsResponse
 		if err := client.Get(ctx, "/api/v1/projects", query, &page); err != nil {
@@ -389,7 +389,7 @@ func allProjects(ctx context.Context, client *api.Client, query url.Values) (api
 }
 
 func allEnvironments(ctx context.Context, client *api.Client, query url.Values) (api.EnvironmentsResponse, error) {
-	response := api.EnvironmentsResponse{}
+	response := api.EnvironmentsResponse{Environments: []api.Environment{}}
 	for {
 		var page api.EnvironmentsResponse
 		if err := client.Get(ctx, "/api/v1/environments", query, &page); err != nil {
