@@ -51,6 +51,14 @@ func (err *APIError) Error() string {
 	return detail
 }
 
+// ReadError builds an APIError from a failed response, using its problem JSON
+// when it has any.
+func ReadError(response *http.Response) *APIError {
+	apiError := &APIError{Status: response.StatusCode, RetryAfter: response.Header.Get("Retry-After")}
+	_ = json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(apiError)
+	return apiError
+}
+
 func New(baseURL, token string) *Client {
 	return &Client{
 		BaseURL:    strings.TrimRight(baseURL, "/"),
@@ -82,8 +90,7 @@ func (client *Client) Get(ctx context.Context, path string, query url.Values, ou
 		fmt.Fprintf(client.ErrWriter, "rate-limit: %s policy=%s request=%s\n", response.Header.Get("RateLimit"), response.Header.Get("RateLimit-Policy"), response.Header.Get("X-Request-ID"))
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		apiError := &APIError{Status: response.StatusCode, RetryAfter: response.Header.Get("Retry-After")}
-		_ = json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(apiError)
+		apiError := ReadError(response)
 		if response.StatusCode == http.StatusUnauthorized {
 			apiError.Hint = client.AuthHint
 		}

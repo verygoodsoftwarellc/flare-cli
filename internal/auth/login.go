@@ -16,6 +16,8 @@ import (
 	"os/exec"
 	"runtime"
 	"time"
+
+	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
 )
 
 type ExchangeResponse struct {
@@ -97,6 +99,9 @@ func Login(ctx context.Context, baseURL string, open func(string) error, status 
 	select {
 	case callback = <-resultChannel:
 	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, errors.New("timed out waiting for sign-in in the browser; try again")
+		}
 		return nil, ctx.Err()
 	}
 	shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -118,10 +123,10 @@ func Login(ctx context.Context, baseURL string, open func(string) error, status 
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("exchange authorization: %s", response.Status)
+		return nil, fmt.Errorf("exchange authorization: %w", api.ReadError(response))
 	}
 	result := &ExchangeResponse{}
-	if err := json.NewDecoder(response.Body).Decode(result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(result); err != nil {
 		return nil, fmt.Errorf("decode authorization: %w", err)
 	}
 	return result, nil
