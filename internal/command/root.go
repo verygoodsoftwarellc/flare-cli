@@ -115,7 +115,7 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			token := ""
+			token, expires := "", ""
 			if withToken {
 				value, err := io.ReadAll(io.LimitReader(options.input, 1024))
 				if err != nil {
@@ -132,7 +132,7 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				token = result.Token
+				token, expires = result.Token, expiryNote(result.ExpiresAt)
 			}
 			fallback, err := settings.StoreToken(token)
 			if err != nil {
@@ -143,7 +143,7 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 				fmt.Fprintf(options.errors, "warning: OS credential store unavailable; token saved mode 0600 in %s\n", path)
 			}
 			options.warnIfFlareTokenSet()
-			fmt.Fprintf(options.output, "Authenticated with %s\n", settings.APIURL)
+			fmt.Fprintf(options.output, "Authenticated with %s%s\n", settings.APIURL, expires)
 			return nil
 		},
 	}
@@ -185,6 +185,16 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 	}
 	command.AddCommand(login, status, logout)
 	return command
+}
+
+// expiryNote says when a new token stops working, since nothing else does until
+// commands start failing. Tokens from `--with-token` don't come with a date.
+func expiryNote(expiresAt string) string {
+	expires, err := time.Parse(time.RFC3339, expiresAt)
+	if err != nil {
+		return ""
+	}
+	return " (token expires " + expires.Format(time.DateOnly) + ")"
 }
 
 func verifyAuthentication(ctx context.Context, client *api.Client) error {

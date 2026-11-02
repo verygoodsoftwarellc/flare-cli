@@ -112,6 +112,18 @@ func TestProjectRowsShowOrganizationNames(t *testing.T) {
 	}
 }
 
+func TestExpiryNote(t *testing.T) {
+	for expiresAt, want := range map[string]string{
+		"2027-01-30T12:00:00Z": " (token expires 2027-01-30)",
+		"":                     "",
+		"soon":                 "",
+	} {
+		if got := expiryNote(expiresAt); got != want {
+			t.Errorf("expiryNote(%q) = %q, want %q", expiresAt, got, want)
+		}
+	}
+}
+
 func TestEnvironmentRowsShowProjectAndOrganizationNames(t *testing.T) {
 	environments := []api.Environment{
 		{ID: 100, ProjectID: 10, Name: "Production"},
