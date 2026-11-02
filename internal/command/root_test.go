@@ -65,6 +65,13 @@ func TestLoginDoesNotAcceptTokenInProcessArguments(t *testing.T) {
 }
 
 func TestStrayArgumentsAreErrors(t *testing.T) {
+	// If a case stops being rejected it runs for real, so nothing here may reach
+	// the developer's stored credentials or a real server.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("FLARE_API_URL", "http://127.0.0.1:1")
+	t.Setenv("FLARE_TOKEN", "flare_pat_test")
+	keyring.MockInit()
 	run := func(args ...string) (string, error) {
 		output := &bytes.Buffer{}
 		root := newRootCommand("flare-cli")
