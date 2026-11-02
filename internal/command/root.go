@@ -88,9 +88,7 @@ func (options *rootOptions) client() (*api.Client, error) {
 	if err != nil {
 		return nil, options.authenticationError(err)
 	}
-	client := api.New(settings.APIURL, token)
-	client.Verbose = options.verbose
-	client.ErrWriter = options.errors
+	client := options.newClient(settings.APIURL, token)
 	login := options.loginCommand()
 	if os.Getenv("FLARE_TOKEN") != "" {
 		client.AuthHint = fmt.Sprintf("FLARE_TOKEN was rejected; replace it, or unset it and run %s.", login)
@@ -98,6 +96,13 @@ func (options *rootOptions) client() (*api.Client, error) {
 		client.AuthHint = fmt.Sprintf("Run %s to sign in again.", login)
 	}
 	return client, nil
+}
+
+func (options *rootOptions) newClient(apiURL, token string) *api.Client {
+	client := api.New(apiURL, token)
+	client.Verbose = options.verbose
+	client.ErrWriter = options.errors
+	return client
 }
 
 func (options *rootOptions) authenticationError(err error) error {
@@ -142,6 +147,9 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 				token = strings.TrimSpace(string(value))
 				if !strings.HasPrefix(token, "flare_pat_") {
 					return errors.New("stdin did not contain a Flare personal access token")
+				}
+				if err := verifyAuthentication(command.Context(), options.newClient(settings.APIURL, token)); err != nil {
+					return fmt.Errorf("token not saved: %w", err)
 				}
 			} else {
 				ctx, cancel := context.WithTimeout(command.Context(), 3*time.Minute)
