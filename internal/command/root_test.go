@@ -109,10 +109,16 @@ func TestEmptyListsAreEmptyArraysInJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	for name, key := range map[string]string{"org": "organizations", "project": "projects", "environment": "environments"} {
+	for _, test := range []struct {
+		key   string
+		build func(*rootOptions) *cobra.Command
+	}{
+		{"organizations", newOrganizationCommand},
+		{"projects", newProjectCommand},
+		{"environments", newEnvironmentCommand},
+	} {
 		output := &bytes.Buffer{}
-		options := &rootOptions{name: "flare-cli", apiURL: server.URL, json: true, output: output, errors: &bytes.Buffer{}}
-		command := map[string]*cobra.Command{"org": newOrganizationCommand(options), "project": newProjectCommand(options), "environment": newEnvironmentCommand(options)}[name]
+		command := test.build(&rootOptions{name: "flare-cli", apiURL: server.URL, json: true, output: output, errors: &bytes.Buffer{}})
 		command.SetArgs([]string{"list"})
 		if err := command.Execute(); err != nil {
 			t.Fatal(err)
@@ -121,8 +127,8 @@ func TestEmptyListsAreEmptyArraysInJSON(t *testing.T) {
 		if err := json.Unmarshal(output.Bytes(), &response); err != nil {
 			t.Fatal(err)
 		}
-		if list, ok := response[key].([]any); !ok || len(list) != 0 {
-			t.Errorf("%s list --json: %s = %#v, want []", name, key, response[key])
+		if list, ok := response[test.key].([]any); !ok || len(list) != 0 {
+			t.Errorf("%s = %#v, want []", test.key, response[test.key])
 		}
 	}
 }
