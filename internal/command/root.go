@@ -187,14 +187,14 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 	return command
 }
 
-// expiryNote says when a new token stops working, since nothing else does until
-// commands start failing. Tokens from `--with-token` don't come with a date.
+// expiryNote says when a new token stops working, in local time, or nothing if
+// the server didn't send a date.
 func expiryNote(expiresAt string) string {
 	expires, err := time.Parse(time.RFC3339, expiresAt)
 	if err != nil {
 		return ""
 	}
-	return " (token expires " + expires.Format(time.DateOnly) + ")"
+	return " (token expires " + expires.Local().Format(time.DateOnly) + ")"
 }
 
 func verifyAuthentication(ctx context.Context, client *api.Client) error {
