@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
@@ -178,6 +179,22 @@ func TestProjectRowsShowOrganizationNames(t *testing.T) {
 	want := [][]string{{"10", "Storefront", "Acme"}, {"20", "Worker", "2"}}
 	if !reflect.DeepEqual(rows, want) {
 		t.Fatalf("unexpected project rows %#v", rows)
+	}
+}
+
+func TestExpiryNote(t *testing.T) {
+	local := time.Local
+	time.Local = time.FixedZone("UTC-5", -5*60*60)
+	t.Cleanup(func() { time.Local = local })
+	for expiresAt, want := range map[string]string{
+		"2027-01-30T12:00:00Z": " (token expires 2027-01-30)",
+		"2027-01-30T00:30:00Z": " (token expires 2027-01-29)",
+		"":                     "",
+		"soon":                 "",
+	} {
+		if got := expiryNote(expiresAt); got != want {
+			t.Errorf("expiryNote(%q) = %q, want %q", expiresAt, got, want)
+		}
 	}
 }
 
