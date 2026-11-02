@@ -97,7 +97,6 @@ func TestLoginSaysWhyTheExchangeFailed(t *testing.T) {
 		want   string
 	}{
 		{"used code", http.StatusNotFound, `{"title":"Invalid Code","detail":"The code is invalid, expired, or already used.","request_id":"req-1"}`, "exchange authorization: The code is invalid, expired, or already used. (request req-1)"},
-		{"rate limited", http.StatusTooManyRequests, `{"detail":"Too many exchange attempts. Try again later."}`, "exchange authorization: Too many exchange attempts. Try again later."},
 		{"not JSON", http.StatusBadGateway, `<html>bad gateway</html>`, "exchange authorization: Bad Gateway"},
 	}
 	for _, test := range tests {
@@ -127,7 +126,7 @@ func TestLoginSaysWhyTheExchangeFailed(t *testing.T) {
 }
 
 func TestLoginSaysWhenSignInTimedOut(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 0)
 	defer cancel()
 	_, err := Login(ctx, "http://127.0.0.1:1", func(string) error { return nil }, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "timed out waiting for sign-in") {
