@@ -49,7 +49,6 @@ func inZone(t *testing.T, zone *time.Location) {
 
 func TestBucketTimesAreLocalLikeTheWebCharts(t *testing.T) {
 	inZone(t, time.FixedZone("EST", -5*60*60))
-	noData := (*string)(nil)
 	through := "2026-11-03T14:04:00Z"
 	for _, test := range []struct{ got, want string }{
 		{bucketTime("2026-11-03T14:02:00Z", "minute"), "2026-11-03 09:02"},
@@ -57,7 +56,7 @@ func TestBucketTimesAreLocalLikeTheWebCharts(t *testing.T) {
 		{bucketTime("2026-11-03T00:00:00Z", "day"), "2026-11-03"},
 		{bucketTime("not a time", "hour"), "not a time"},
 		{dataThrough(&through, "minute"), "data through 2026-11-03 09:04"},
-		{dataThrough(noData, "minute"), "no data"},
+		{dataThrough(nil, "minute"), "no data"},
 	} {
 		if test.got != test.want {
 			t.Errorf("got %q, want %q", test.got, test.want)
