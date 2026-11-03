@@ -100,6 +100,35 @@ func TestStrayArgumentsAreErrors(t *testing.T) {
 	}
 }
 
+func TestSubcommandTyposSuggestTheClosestCommand(t *testing.T) {
+	// Every case must fail before it runs, so nothing here can reach the
+	// developer's stored credentials or a real server.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("FLARE_API_URL", "http://127.0.0.1:1")
+	t.Setenv("FLARE_TOKEN", "flare_pat_test")
+	keyring.MockInit()
+	for _, test := range []struct {
+		args       []string
+		suggestion string
+	}{
+		{[]string{"metrics", "oveview"}, "overview"},
+		{[]string{"metrics", "seires"}, "series"},
+		{[]string{"auth", "statsu"}, "status"},
+		{[]string{"env", "lst"}, "list"},
+		{[]string{"mcp", "instal"}, "install"},
+		{[]string{"completion", "zhs"}, "zsh"},
+	} {
+		root := newRootCommand("flare-cli")
+		root.SetOut(io.Discard)
+		root.SetArgs(test.args)
+		err := root.Execute()
+		if err == nil || !strings.Contains(err.Error(), "unknown command") || !strings.Contains(err.Error(), "Did you mean this?\n\t"+test.suggestion+"\n") {
+			t.Errorf("%v: err = %v", test.args, err)
+		}
+	}
+}
+
 func TestAuthenticationErrorsUseInvokedExecutableName(t *testing.T) {
 	root := newRootCommand("flare-cli")
 	if root.Use != "flare-cli" {

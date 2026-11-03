@@ -65,7 +65,10 @@ func newRootCommand(name string) *cobra.Command {
 // its help command later, which keeps that command's arguments working.
 func rejectStrayArgs(parent *cobra.Command) {
 	for _, command := range parent.Commands() {
-		if command.Args == nil {
+		switch {
+		case command.HasSubCommands():
+			command.Args = unknownSubcommand
+		case command.Args == nil:
 			command.Args = cobra.NoArgs
 		}
 		if !command.Runnable() {
@@ -73,6 +76,22 @@ func rejectStrayArgs(parent *cobra.Command) {
 		}
 		rejectStrayArgs(command)
 	}
+}
+
+// unknownSubcommand rejects arguments like cobra.NoArgs, and suggests the
+// closest subcommands the way cobra does for typos at the root.
+func unknownSubcommand(command *cobra.Command, args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	message := fmt.Sprintf("unknown command %q for %q", args[0], command.CommandPath())
+	if command.SuggestionsMinimumDistance <= 0 {
+		command.SuggestionsMinimumDistance = 2 // cobra's default at the root
+	}
+	if suggestions := command.SuggestionsFor(args[0]); len(suggestions) > 0 {
+		message += "\n\nDid you mean this?\n\t" + strings.Join(suggestions, "\n\t") + "\n"
+	}
+	return errors.New(message)
 }
 
 func (options *rootOptions) config() (*config.Config, error) {
