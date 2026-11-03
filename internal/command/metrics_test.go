@@ -30,11 +30,11 @@ func TestSeriesTableShowsWindowStats(t *testing.T) {
 	}
 
 	text := output.String()
-	want := "Production job: 4 requests, 1.5m total, 22.5s avg, 25.00% errors (2 minute buckets, data through 2026-11-01 07:01)\n\nTIME"
+	want := "Production job: 4 requests, 1.5m total, 22.5s avg, 25.00% errors (2 minute buckets, data through 2026-11-01 07:01 EST)\n\nTIME"
 	if !strings.HasPrefix(text, want) {
 		t.Fatalf("want prefix %q in:\n%s", want, text)
 	}
-	if !strings.Contains(text, "2026-11-01 07:01  1") {
+	if !strings.Contains(text, "2026-11-01 07:01 EST  1") {
 		t.Fatalf("missing bucket row in:\n%s", text)
 	}
 }
@@ -51,16 +51,28 @@ func TestBucketTimesAreLocalLikeTheWebCharts(t *testing.T) {
 	inZone(t, time.FixedZone("EST", -5*60*60))
 	through := "2026-11-03T14:04:00Z"
 	for _, test := range []struct{ got, want string }{
-		{bucketTime("2026-11-03T14:02:00Z", "minute"), "2026-11-03 09:02"},
-		{bucketTime("2026-11-03T03:00:00Z", "hour"), "2026-11-02 22:00"},
+		{bucketTime("2026-11-03T14:02:00Z", "minute"), "2026-11-03 09:02 EST"},
+		{bucketTime("2026-11-03T03:00:00Z", "hour"), "2026-11-02 22:00 EST"},
 		{bucketTime("2026-11-03T00:00:00Z", "day"), "2026-11-03"},
 		{bucketTime("not a time", "hour"), "not a time"},
-		{dataThrough(&through, "minute"), "data through 2026-11-03 09:04"},
+		{dataThrough(&through, "minute"), "data through 2026-11-03 09:04 EST"},
 		{dataThrough(nil, "minute"), "no data"},
 	} {
 		if test.got != test.want {
 			t.Errorf("got %q, want %q", test.got, test.want)
 		}
+	}
+}
+
+func TestBucketTimesStayDistinctWhenClocksFallBack(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip(err)
+	}
+	inZone(t, newYork)
+	first, second := bucketTime("2026-11-01T05:00:00Z", "hour"), bucketTime("2026-11-01T06:00:00Z", "hour")
+	if first != "2026-11-01 01:00 EDT" || second != "2026-11-01 01:00 EST" {
+		t.Fatalf("got %q and %q", first, second)
 	}
 }
 

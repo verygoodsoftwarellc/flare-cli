@@ -199,7 +199,8 @@ func seriesRows(buckets []string, resolution string, series api.Series) [][]stri
 	return rows
 }
 
-// bucketTime shows a bucket start in local time, as the Flare web charts do.
+// bucketTime shows a bucket start in local time, as the Flare web charts do,
+// with the zone so the repeated hour when clocks fall back stays distinct.
 // Day buckets are calendar days, so they keep the date the server sent.
 func bucketTime(value, resolution string) string {
 	start, err := time.Parse(time.RFC3339, value)
@@ -209,7 +210,7 @@ func bucketTime(value, resolution string) string {
 	if resolution == "day" {
 		return start.Format(time.DateOnly)
 	}
-	return start.Local().Format("2006-01-02 15:04")
+	return start.Local().Format("2006-01-02 15:04 MST")
 }
 
 func dataThrough(value *string, resolution string) string {
