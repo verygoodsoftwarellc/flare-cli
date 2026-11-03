@@ -68,6 +68,7 @@ func rejectStrayArgs(parent *cobra.Command) {
 		switch {
 		case command.HasSubCommands():
 			command.Args = unknownSubcommand
+			command.SuggestionsMinimumDistance = 2 // cobra's default at the root
 		case command.Args == nil:
 			command.Args = cobra.NoArgs
 		}
@@ -78,20 +79,17 @@ func rejectStrayArgs(parent *cobra.Command) {
 	}
 }
 
-// unknownSubcommand rejects arguments like cobra.NoArgs, and suggests the
-// closest subcommands the way cobra does for typos at the root.
+// unknownSubcommand is cobra.NoArgs plus the closest subcommands, the way
+// cobra suggests them for typos at the root.
 func unknownSubcommand(command *cobra.Command, args []string) error {
-	if len(args) == 0 {
+	err := cobra.NoArgs(command, args)
+	if err == nil {
 		return nil
 	}
-	message := fmt.Sprintf("unknown command %q for %q", args[0], command.CommandPath())
-	if command.SuggestionsMinimumDistance <= 0 {
-		command.SuggestionsMinimumDistance = 2 // cobra's default at the root
-	}
 	if suggestions := command.SuggestionsFor(args[0]); len(suggestions) > 0 {
-		message += "\n\nDid you mean this?\n\t" + strings.Join(suggestions, "\n\t") + "\n"
+		return fmt.Errorf("%w\n\nDid you mean this?\n\t%s\n", err, strings.Join(suggestions, "\n\t"))
 	}
-	return errors.New(message)
+	return err
 }
 
 func (options *rootOptions) config() (*config.Config, error) {

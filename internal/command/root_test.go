@@ -80,34 +80,7 @@ func TestStrayArgumentsAreErrors(t *testing.T) {
 		root.SetArgs(args)
 		return root.Execute()
 	}
-	for _, args := range [][]string{
-		{"metrics", "oveview"},
-		{"auth", "statsu"},
-		{"env", "lst"},
-		{"project", "list", "123"},
-		{"metrics", "overview", "789"},
-		{"auth", "logout", "extra"},
-		{"completion", "zhs"},
-	} {
-		if err := run(args...); err == nil || !strings.Contains(err.Error(), "unknown command") {
-			t.Errorf("%v: err = %v", args, err)
-		}
-	}
-	for _, args := range [][]string{{"metrics"}, {"auth"}, {"env"}, {"metrics", "overview", "--help"}, {"help", "metrics"}, {"completion", "bash"}} {
-		if err := run(args...); err != nil {
-			t.Errorf("%v: err = %v", args, err)
-		}
-	}
-}
-
-func TestSubcommandTyposSuggestTheClosestCommand(t *testing.T) {
-	// Every case must fail before it runs, so nothing here can reach the
-	// developer's stored credentials or a real server.
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("FLARE_API_URL", "http://127.0.0.1:1")
-	t.Setenv("FLARE_TOKEN", "flare_pat_test")
-	keyring.MockInit()
+	// Typos under a group suggest the closest command, as cobra does at the root.
 	for _, test := range []struct {
 		args       []string
 		suggestion string
@@ -118,13 +91,21 @@ func TestSubcommandTyposSuggestTheClosestCommand(t *testing.T) {
 		{[]string{"env", "lst"}, "list"},
 		{[]string{"mcp", "instal"}, "install"},
 		{[]string{"completion", "zhs"}, "zsh"},
+		{[]string{"metrics", "xyzzy"}, ""},
+		{[]string{"project", "list", "123"}, ""},
+		{[]string{"metrics", "overview", "789"}, ""},
+		{[]string{"auth", "logout", "extra"}, ""},
 	} {
-		root := newRootCommand("flare-cli")
-		root.SetOut(io.Discard)
-		root.SetArgs(test.args)
-		err := root.Execute()
-		if err == nil || !strings.Contains(err.Error(), "unknown command") || !strings.Contains(err.Error(), "Did you mean this?\n\t"+test.suggestion+"\n") {
+		err := run(test.args...)
+		if err == nil || !strings.Contains(err.Error(), "unknown command") {
 			t.Errorf("%v: err = %v", test.args, err)
+		} else if suggested := strings.Contains(err.Error(), "Did you mean this?\n\t"+test.suggestion+"\n"); suggested != (test.suggestion != "") {
+			t.Errorf("%v: suggestion %q missing or unexpected in %q", test.args, test.suggestion, err)
+		}
+	}
+	for _, args := range [][]string{{"metrics"}, {"auth"}, {"env"}, {"metrics", "overview", "--help"}, {"help", "metrics"}, {"completion", "bash"}} {
+		if err := run(args...); err != nil {
+			t.Errorf("%v: err = %v", args, err)
 		}
 	}
 }
