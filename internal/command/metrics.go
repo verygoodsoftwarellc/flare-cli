@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
@@ -184,7 +185,7 @@ func metricRows(operations []api.Metric) [][]string {
 
 // seriesRows renders bucket-aligned arrays one bucket per row, deriving avg
 // and error rate the same way the server does for window totals.
-func seriesRows(buckets []string, series api.Series) [][]string {
+func seriesRows(buckets []string, resolution string, series api.Series) [][]string {
 	rows := make([][]string, 0, len(buckets))
 	for index, bucket := range buckets {
 		count, sum, errorCount := series.Count[index], series.Sum[index], series.ErrorCount[index]
@@ -193,16 +194,29 @@ func seriesRows(buckets []string, series api.Series) [][]string {
 			avg = float64(sum) / float64(count)
 			errorRate = float64(errorCount) / float64(count) * 100
 		}
-		rows = append(rows, append([]string{bucket}, statsCells(count, sum, avg, errorRate)...))
+		rows = append(rows, append([]string{bucketTime(bucket, resolution)}, statsCells(count, sum, avg, errorRate)...))
 	}
 	return rows
 }
 
-func dataThrough(value *string) string {
+// bucketTime shows a bucket start in local time, as the Flare web charts do.
+// Day buckets are calendar days, so they keep the date the server sent.
+func bucketTime(value, resolution string) string {
+	start, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return value
+	}
+	if resolution == "day" {
+		return start.Format(time.DateOnly)
+	}
+	return start.Local().Format("2006-01-02 15:04")
+}
+
+func dataThrough(value *string, resolution string) string {
 	if value == nil {
 		return "no data"
 	}
-	return *value
+	return "data through " + bucketTime(*value, resolution)
 }
 
 // --- commands ---
@@ -346,9 +360,9 @@ func newNamespaceOverviewCommand(options *rootOptions) *cobra.Command {
 			if options.json {
 				return writeJSON(options.output, response)
 			}
-			fmt.Fprintf(options.output, "%s %s: %s, %s of environment time (%d %s buckets, data through %s)\n\n",
+			fmt.Fprintf(options.output, "%s %s: %s, %s of environment time (%d %s buckets, %s)\n\n",
 				response.Environment.Name, response.Namespace, statsSummary(response.Stats), impactCell(response.Stats.Impact),
-				len(response.Buckets), response.Bucket, dataThrough(response.DataThrough))
+				len(response.Buckets), response.Bucket, dataThrough(response.DataThrough, response.Bucket))
 			fmt.Fprintln(options.output, "Top by sum")
 			if err := writeTable(options.output, operationHeader, rankedRows(response.TopBySum)); err != nil {
 				return err
@@ -387,10 +401,10 @@ func newSeriesCommand(options *rootOptions) *cobra.Command {
 			if options.json {
 				return writeJSON(options.output, response)
 			}
-			fmt.Fprintf(options.output, "%s %s: %s (%d %s buckets, data through %s)\n\n",
+			fmt.Fprintf(options.output, "%s %s: %s (%d %s buckets, %s)\n\n",
 				response.Environment.Name, response.Namespace, statsSummary(response.Stats),
-				len(response.Buckets), response.Bucket, dataThrough(response.DataThrough))
-			return writeTable(options.output, append([]string{"TIME"}, statsHeader...), seriesRows(response.Buckets, response.Series))
+				len(response.Buckets), response.Bucket, dataThrough(response.DataThrough, response.Bucket))
+			return writeTable(options.output, append([]string{"TIME"}, statsHeader...), seriesRows(response.Buckets, response.Bucket, response.Series))
 		},
 	}
 	scope.bindFlags(command, strings.Join(namespaces, ", "))
@@ -443,8 +457,8 @@ func newQueryCommand(options *rootOptions) *cobra.Command {
 			if options.json {
 				return writeJSON(options.output, response)
 			}
-			fmt.Fprintf(options.output, "%s: %s (data through %s)\n",
-				response.Environment.Name, statsSummary(response.Total.Stats), dataThrough(response.DataThrough))
+			fmt.Fprintf(options.output, "%s: %s (%s)\n",
+				response.Environment.Name, statsSummary(response.Total.Stats), dataThrough(response.DataThrough, response.Bucket))
 			if len(response.Groups) == 0 {
 				return nil
 			}
