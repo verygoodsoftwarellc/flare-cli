@@ -80,17 +80,27 @@ func TestStrayArgumentsAreErrors(t *testing.T) {
 		root.SetArgs(args)
 		return root.Execute()
 	}
-	for _, args := range [][]string{
-		{"metrics", "oveview"},
-		{"auth", "statsu"},
-		{"env", "lst"},
-		{"project", "list", "123"},
-		{"metrics", "overview", "789"},
-		{"auth", "logout", "extra"},
-		{"completion", "zhs"},
+	// Typos under a group suggest the closest command, as cobra does at the root.
+	for _, test := range []struct {
+		args       []string
+		suggestion string
+	}{
+		{[]string{"metrics", "oveview"}, "overview"},
+		{[]string{"metrics", "seires"}, "series"},
+		{[]string{"auth", "statsu"}, "status"},
+		{[]string{"env", "lst"}, "list"},
+		{[]string{"mcp", "instal"}, "install"},
+		{[]string{"completion", "zhs"}, "zsh"},
+		{[]string{"metrics", "xyzzy"}, ""},
+		{[]string{"project", "list", "123"}, ""},
+		{[]string{"metrics", "overview", "789"}, ""},
+		{[]string{"auth", "logout", "extra"}, ""},
 	} {
-		if err := run(args...); err == nil || !strings.Contains(err.Error(), "unknown command") {
-			t.Errorf("%v: err = %v", args, err)
+		err := run(test.args...)
+		if err == nil || !strings.Contains(err.Error(), "unknown command") {
+			t.Errorf("%v: err = %v", test.args, err)
+		} else if suggested := strings.Contains(err.Error(), "Did you mean this?\n\t"+test.suggestion+"\n"); suggested != (test.suggestion != "") {
+			t.Errorf("%v: suggestion %q missing or unexpected in %q", test.args, test.suggestion, err)
 		}
 	}
 	for _, args := range [][]string{{"metrics"}, {"auth"}, {"env"}, {"metrics", "overview", "--help"}, {"help", "metrics"}, {"completion", "bash"}} {
