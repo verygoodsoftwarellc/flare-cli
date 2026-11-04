@@ -5,10 +5,14 @@ package testenv
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/zalando/go-keyring"
 )
+
+var clearedEnv = []string{"FLARE_TOKEN", "FLARE_API_URL"}
 
 // Run is for TestMain. It points the home and config directories at a
 // throwaway one, clears FLARE_TOKEN and FLARE_API_URL, and swaps the OS
@@ -25,8 +29,27 @@ func Run(m *testing.M) int {
 	for _, name := range []string{"HOME", "USERPROFILE", "XDG_CONFIG_HOME", "APPDATA"} {
 		os.Setenv(name, home)
 	}
-	os.Unsetenv("FLARE_TOKEN")
-	os.Unsetenv("FLARE_API_URL")
+	for _, name := range clearedEnv {
+		os.Unsetenv(name)
+	}
 	keyring.MockInit()
 	return m.Run()
+}
+
+// Check fails the test unless Run is in effect, so a package that loses its
+// TestMain finds out.
+func Check(t *testing.T) {
+	t.Helper()
+	directory, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(directory, filepath.Clean(os.TempDir())) {
+		t.Fatalf("config directory %s is outside the temp directory", directory)
+	}
+	for _, name := range clearedEnv {
+		if os.Getenv(name) != "" {
+			t.Fatalf("%s is set to the developer's value", name)
+		}
+	}
 }

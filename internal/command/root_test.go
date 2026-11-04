@@ -470,7 +470,6 @@ func TestLoginWithTokenChecksTheTokenBeforeSavingIt(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-			t.Setenv("FLARE_TOKEN", "")
 			keyring.MockInit()
 			var sent string
 			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
