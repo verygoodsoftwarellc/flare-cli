@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zalando/go-keyring"
 )
@@ -179,5 +180,58 @@ func TestAPIURLRequiresHTTPSExceptForLoopback(t *testing.T) {
 	}
 	if _, err := Load("http://flare.example"); err == nil {
 		t.Fatal("expected plaintext non-loopback API URL to be rejected")
+	}
+}
+
+// A Secret Service unlock prompt nobody answers blocks the call forever, so
+// every credential store call has to give up on its own.
+func TestCredentialStoreCallsGiveUpWhenTheStoreHangs(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	stuck, exited := make(chan struct{}), make(chan struct{}, 3)
+	hang := func() { <-stuck; exited <- struct{}{} }
+	originalGet, originalSet, originalDelete, originalTimeout := keyringGet, keyringSet, keyringDelete, keyringTimeout
+	keyringGet = func(_, _ string) (string, error) { hang(); return "flare_pat_late", nil }
+	keyringSet = func(_, _, _ string) error { hang(); return nil }
+	keyringDelete = func(_, _ string) error { hang(); return nil }
+	keyringTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		// Let the abandoned calls finish before putting the real store back.
+		close(stuck)
+		for range 3 {
+			<-exited
+		}
+		keyringGet, keyringSet, keyringDelete, keyringTimeout = originalGet, originalSet, originalDelete, originalTimeout
+	})
+
+	returns := func(name string, call func()) {
+		t.Helper()
+		done := make(chan struct{})
+		go func() { call(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s is still waiting on the credential store", name)
+		}
+	}
+
+	settings := &Config{APIURL: "https://flare.test"}
+	var token string
+	var err error
+	returns("TokenValue", func() { token, err = settings.TokenValue() })
+	if token != "" || !errors.Is(err, errKeyringTimeout) || !strings.Contains(err.Error(), "unlocked") {
+		t.Fatalf("expected a credential store timeout, got %q, %v", token, err)
+	}
+
+	var fallback bool
+	returns("StoreToken", func() { fallback, err = settings.StoreToken("flare_pat_current") })
+	if err != nil || !fallback || settings.TokenBackend != tokenBackendFile || settings.Token != "flare_pat_current" {
+		t.Fatalf("expected the file fallback, got %v, %v, %#v", fallback, err, settings)
+	}
+
+	settings.TokenBackend = tokenBackendKeyring
+	returns("DeleteToken", func() { _, err = settings.DeleteToken() })
+	if !errors.Is(err, errKeyringTimeout) {
+		t.Fatalf("expected a credential store timeout, got %v", err)
 	}
 }
