@@ -195,10 +195,11 @@ func TestCredentialStoreCallsGiveUpWhenTheStoreHangs(t *testing.T) {
 	keyringSet = func(_, _, _ string) error { hang(); return nil }
 	keyringDelete = func(_, _ string) error { hang(); return nil }
 	keyringTimeout = 10 * time.Millisecond
+	started := 0
 	t.Cleanup(func() {
 		// Let the abandoned calls finish before putting the real store back.
 		close(stuck)
-		for range 3 {
+		for range started {
 			<-exited
 		}
 		keyringGet, keyringSet, keyringDelete, keyringTimeout = originalGet, originalSet, originalDelete, originalTimeout
@@ -206,6 +207,7 @@ func TestCredentialStoreCallsGiveUpWhenTheStoreHangs(t *testing.T) {
 
 	returns := func(name string, call func()) {
 		t.Helper()
+		started++
 		done := make(chan struct{})
 		go func() { call(); close(done) }()
 		select {
