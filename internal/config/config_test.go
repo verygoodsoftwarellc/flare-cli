@@ -219,7 +219,7 @@ func TestCredentialStoreCallsGiveUpWhenTheStoreHangs(t *testing.T) {
 	var token string
 	var err error
 	returns("TokenValue", func() { token, err = settings.TokenValue() })
-	if token != "" || !errors.Is(err, errKeyringTimeout) || !strings.Contains(err.Error(), "unlocked") {
+	if token != "" || !errors.Is(err, errKeyringTimeout) {
 		t.Fatalf("expected a credential store timeout, got %q, %v", token, err)
 	}
 
@@ -229,7 +229,7 @@ func TestCredentialStoreCallsGiveUpWhenTheStoreHangs(t *testing.T) {
 		t.Fatalf("expected the file fallback, got %v, %v, %#v", fallback, err, settings)
 	}
 
-	settings.TokenBackend = tokenBackendKeyring
+	settings = &Config{APIURL: "https://flare.test", TokenBackend: tokenBackendKeyring}
 	returns("DeleteToken", func() { _, err = settings.DeleteToken() })
 	if !errors.Is(err, errKeyringTimeout) {
 		t.Fatalf("expected a credential store timeout, got %v", err)

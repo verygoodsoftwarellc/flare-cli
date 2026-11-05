@@ -168,10 +168,11 @@ func (config *Config) TokenValue() (string, error) {
 }
 
 // StoreToken prefers the operating system credential store. On systems where
-// it is unavailable, it falls back to the mode-0600 config file and tells the
-// caller so it can display a warning.
+// it is unavailable, or doesn't respond within keyringTimeout, it falls back to
+// the mode-0600 config file and tells the caller so it can display a warning.
 func (config *Config) StoreToken(token string) (fallback bool, err error) {
-	if err := withKeyringTimeout(func() error { return keyringSet(keyringService, config.APIURL, token) }); err == nil {
+	err = withKeyringTimeout(func() error { return keyringSet(keyringService, config.APIURL, token) })
+	if err == nil {
 		config.Token = ""
 		config.TokenBackend = tokenBackendKeyring
 		config.TokenAPIURL = ""
