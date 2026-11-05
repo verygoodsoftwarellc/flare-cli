@@ -11,8 +11,8 @@ import (
 )
 
 // Tests here run real commands, including auth logout. Times print in the
-// local zone, so the tests pin one up front: changing time.Local while a test
-// server's goroutines read the clock is a data race.
+// local zone, so pin it once here: setting time.Local per test races with
+// test servers' goroutines.
 func TestMain(m *testing.M) {
 	zone, err := time.LoadLocation("America/New_York")
 	if err != nil {
