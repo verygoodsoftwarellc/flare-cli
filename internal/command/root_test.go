@@ -11,7 +11,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
@@ -193,7 +192,6 @@ func TestProjectRowsShowOrganizationNames(t *testing.T) {
 }
 
 func TestExpiryNote(t *testing.T) {
-	inZone(t, time.FixedZone("UTC-5", -5*60*60))
 	for expiresAt, want := range map[string]string{
 		"2027-01-30T12:00:00Z": " (token expires 2027-01-30)",
 		"2027-01-30T00:30:00Z": " (token expires 2027-01-29)",
