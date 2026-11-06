@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/zalando/go-keyring"
 )
@@ -24,7 +25,29 @@ var (
 	keyringGet    = keyring.Get
 	keyringSet    = keyring.Set
 	keyringDelete = keyring.Delete
+
+	// keyringTimeout bounds each credential store call. Linux's Secret Service
+	// waits on its unlock prompt with no deadline, so a prompt nobody answers
+	// (an SSH session into a desktop, say) would hang the command for good. A
+	// minute, as the GitHub CLI uses, leaves time to type a password.
+	keyringTimeout = time.Minute
 )
+
+var errKeyringTimeout = errors.New("the OS credential store did not respond")
+
+// withKeyringTimeout runs a credential store call, giving up after
+// keyringTimeout. A call that gives up keeps running in the background, which
+// is fine for a process that exits when the command finishes.
+func withKeyringTimeout(call func() error) error {
+	done := make(chan error, 1)
+	go func() { done <- call() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(keyringTimeout):
+		return fmt.Errorf("%w within %s; it may be waiting to be unlocked", errKeyringTimeout, keyringTimeout)
+	}
+}
 
 type Config struct {
 	APIURL       string `json:"api_url"`
@@ -130,18 +153,26 @@ func (config *Config) TokenValue() (string, error) {
 		}
 		return "", fmt.Errorf("no stored credentials for %s", config.APIURL)
 	}
-	token, err := keyringGet(keyringService, config.APIURL)
+	var token string
+	err := withKeyringTimeout(func() (err error) {
+		token, err = keyringGet(keyringService, config.APIURL)
+		return err
+	})
 	if err == nil {
 		return token, nil
+	}
+	if errors.Is(err, errKeyringTimeout) {
+		return "", err
 	}
 	return "", errors.New("not authenticated")
 }
 
 // StoreToken prefers the operating system credential store. On systems where
-// it is unavailable, it falls back to the mode-0600 config file and tells the
-// caller so it can display a warning.
+// it is unavailable, or doesn't respond within keyringTimeout, it falls back to
+// the mode-0600 config file and tells the caller so it can display a warning.
 func (config *Config) StoreToken(token string) (fallback bool, err error) {
-	if err := keyringSet(keyringService, config.APIURL, token); err == nil {
+	err = withKeyringTimeout(func() error { return keyringSet(keyringService, config.APIURL, token) })
+	if err == nil {
 		config.Token = ""
 		config.TokenBackend = tokenBackendKeyring
 		config.TokenAPIURL = ""
@@ -158,7 +189,7 @@ func (config *Config) StoreToken(token string) (fallback bool, err error) {
 // storeSkipped, so a machine with no credential store can still log out.
 func (config *Config) DeleteToken() (storeSkipped bool, err error) {
 	storedInKeyring := config.TokenBackend == tokenBackendKeyring
-	keyringErr := keyringDelete(keyringService, config.APIURL)
+	keyringErr := withKeyringTimeout(func() error { return keyringDelete(keyringService, config.APIURL) })
 	config.Token = ""
 	config.TokenBackend = ""
 	config.TokenAPIURL = ""
