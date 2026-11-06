@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestSeriesTableShowsWindowStats(t *testing.T) {
@@ -19,7 +18,6 @@ func TestSeriesTableShowsWindowStats(t *testing.T) {
 	}))
 	defer server.Close()
 	t.Setenv("FLARE_TOKEN", "flare_pat_test")
-	inZone(t, time.FixedZone("EST", -5*60*60))
 
 	output := &bytes.Buffer{}
 	options := &rootOptions{name: "flare-cli", apiURL: server.URL, output: output, errors: &bytes.Buffer{}}
@@ -39,16 +37,7 @@ func TestSeriesTableShowsWindowStats(t *testing.T) {
 	}
 }
 
-// inZone sets the local time zone for one test.
-func inZone(t *testing.T, zone *time.Location) {
-	t.Helper()
-	original := time.Local
-	time.Local = zone
-	t.Cleanup(func() { time.Local = original })
-}
-
 func TestBucketTimesAreLocalLikeTheWebCharts(t *testing.T) {
-	inZone(t, time.FixedZone("EST", -5*60*60))
 	through := "2026-11-03T14:04:00Z"
 	for _, test := range []struct{ got, want string }{
 		{bucketTime("2026-11-03T14:02:00Z", "minute"), "2026-11-03 09:02 EST"},
@@ -65,11 +54,6 @@ func TestBucketTimesAreLocalLikeTheWebCharts(t *testing.T) {
 }
 
 func TestBucketTimesStayDistinctWhenClocksFallBack(t *testing.T) {
-	newYork, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		t.Skip(err)
-	}
-	inZone(t, newYork)
 	first, second := bucketTime("2026-11-01T05:00:00Z", "hour"), bucketTime("2026-11-01T06:00:00Z", "hour")
 	if first != "2026-11-01 01:00 EDT" || second != "2026-11-01 01:00 EST" {
 		t.Fatalf("got %q and %q", first, second)
