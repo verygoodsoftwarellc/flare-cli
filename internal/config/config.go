@@ -150,6 +150,11 @@ func writeConfigFile(path string, data []byte) error {
 	}
 	temporary, err := os.CreateTemp(filepath.Dir(path), ".flare-config-*")
 	if err != nil {
+		// A writable file in a read-only directory cannot be replaced. Keep
+		// the existing in-place behavior for that configuration.
+		if errors.Is(err, os.ErrPermission) {
+			return os.WriteFile(path, data, 0o600)
+		}
 		return err
 	}
 	defer os.Remove(temporary.Name())

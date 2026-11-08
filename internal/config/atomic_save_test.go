@@ -4,11 +4,15 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
 func TestSaveKeepsConfigReadableDuringReplacement(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows fallback retains existing in-place writes")
+	}
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("APPDATA", t.TempDir())
@@ -103,9 +107,50 @@ func TestSavePreservesConfigSymlinks(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if info.Mode().Perm() != 0600 {
+			if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 				t.Fatalf("target mode=%o", info.Mode().Perm())
 			}
 		})
+	}
+}
+
+func TestSaveKeepsWritableFileInReadOnlyDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix directory modes")
+	}
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	settings := &Config{APIURL: defaultAPIURL}
+	if err := settings.Save(); err != nil {
+		t.Fatal(err)
+	}
+	path, err := Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Dir(path)
+	if err := os.Chmod(directory, 0500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(directory, 0700)
+	if probe, err := os.CreateTemp(directory, "permission-probe-"); err == nil {
+		probe.Close()
+		os.Remove(probe.Name())
+		t.Skip("privileged process bypasses directory mode")
+	}
+	settings.APIURL = "http://127.0.0.1:4201"
+	if err := settings.Save(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved Config
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.APIURL != settings.APIURL {
+		t.Fatal("config was not saved")
 	}
 }
