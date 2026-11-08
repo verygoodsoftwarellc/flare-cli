@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
 )
 
@@ -67,16 +69,29 @@ func TestCatalogCommandsReturnPaginationErrors(t *testing.T) {
 			}))
 			defer server.Close()
 			output := &bytes.Buffer{}
-			root := newRootCommand("flare-cli")
-			root.SetArgs([]string{name, "list", "--json", "--api-url", server.URL})
-			root.SetOut(output)
-			err := root.Execute()
+			options := &rootOptions{apiURL: server.URL, json: true, output: output, errors: io.Discard}
+			var command *cobra.Command
+			switch name {
+			case "org":
+				command = newOrganizationCommand(options)
+			case "project":
+				command = newProjectCommand(options)
+			case "environment":
+				command = newEnvironmentCommand(options)
+			}
+			command.SilenceUsage, command.SilenceErrors = true, true
+			command.SetArgs([]string{"list"})
+			err := command.Execute()
 			if err == nil || !strings.Contains(err.Error(), "pagination cursor repeated") {
 				t.Fatalf("err=%v", err)
 			}
 			if requests != 2 {
 				t.Fatalf("requests=%d,want2", requests)
 			}
+			if output.Len() != 0 {
+				t.Fatalf("error printed partial JSON: %s", output)
+			}
+			t.Logf("%s list --json: %v; %d requests; %d stdout bytes", name, err, requests, output.Len())
 		})
 	}
 }
