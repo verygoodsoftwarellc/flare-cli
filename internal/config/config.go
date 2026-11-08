@@ -148,6 +148,15 @@ func writeConfigFile(path string, data []byte) error {
 		// first-write behavior instead of replacing the link itself.
 		return os.WriteFile(path, data, 0o600)
 	}
+	// Replacing a directory entry would otherwise bypass a read-only file's
+	// write permissions. Retain the same permission check as in-place writes.
+	if existing, err := os.OpenFile(path, os.O_WRONLY, 0); err == nil {
+		if err := existing.Close(); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	temporary, err := os.CreateTemp(filepath.Dir(path), ".flare-config-*")
 	if err != nil {
 		// A writable file in a read-only directory cannot be replaced. Keep

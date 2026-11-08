@@ -154,3 +154,42 @@ func TestSaveKeepsWritableFileInReadOnlyDirectory(t *testing.T) {
 		t.Fatal("config was not saved")
 	}
 }
+
+func TestSaveStillRejectsReadOnlyConfig(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix file modes")
+	}
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	settings := &Config{APIURL: defaultAPIURL}
+	if err := settings.Save(); err != nil {
+		t.Fatal(err)
+	}
+	path, err := Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0400); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(path, 0600)
+	if file, err := os.OpenFile(path, os.O_WRONLY, 0); err == nil {
+		file.Close()
+		t.Skip("privileged process bypasses file mode")
+	}
+	settings.APIURL = "http://127.0.0.1:4201"
+	if err := settings.Save(); err == nil {
+		t.Fatal("read-only config was replaced")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved Config
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.APIURL != defaultAPIURL {
+		t.Fatal("old config was changed")
+	}
+}
