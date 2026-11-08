@@ -185,7 +185,10 @@ func metricRows(operations []api.Metric) [][]string {
 
 // seriesRows renders bucket-aligned arrays one bucket per row, deriving avg
 // and error rate the same way the server does for window totals.
-func seriesRows(buckets []string, resolution string, series api.Series) [][]string {
+func seriesRows(buckets []string, resolution string, series api.Series) ([][]string, error) {
+	if len(series.Count) != len(buckets) || len(series.Sum) != len(buckets) || len(series.ErrorCount) != len(buckets) {
+		return nil, errors.New("invalid series response: count, sum, and error_count must match buckets")
+	}
 	rows := make([][]string, 0, len(buckets))
 	for index, bucket := range buckets {
 		count, sum, errorCount := series.Count[index], series.Sum[index], series.ErrorCount[index]
@@ -196,7 +199,7 @@ func seriesRows(buckets []string, resolution string, series api.Series) [][]stri
 		}
 		rows = append(rows, append([]string{bucketTime(bucket, resolution)}, statsCells(count, sum, avg, errorRate)...))
 	}
-	return rows
+	return rows, nil
 }
 
 // bucketTime shows a bucket start in local time, as the Flare web charts do,
@@ -402,10 +405,14 @@ func newSeriesCommand(options *rootOptions) *cobra.Command {
 			if options.json {
 				return writeJSON(options.output, response)
 			}
+			rows, err := seriesRows(response.Buckets, response.Bucket, response.Series)
+			if err != nil {
+				return err
+			}
 			fmt.Fprintf(options.output, "%s %s: %s (%d %s buckets, %s)\n\n",
 				response.Environment.Name, response.Namespace, statsSummary(response.Stats),
 				len(response.Buckets), response.Bucket, dataThrough(response.DataThrough, response.Bucket))
-			return writeTable(options.output, append([]string{"TIME"}, statsHeader...), seriesRows(response.Buckets, response.Bucket, response.Series))
+			return writeTable(options.output, append([]string{"TIME"}, statsHeader...), rows)
 		},
 	}
 	scope.bindFlags(command, strings.Join(namespaces, ", "))
