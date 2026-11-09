@@ -411,6 +411,7 @@ func nameOrID(name string, id int64) string {
 func allOrganizations(ctx context.Context, client *api.Client) (api.OrganizationsResponse, error) {
 	response := api.OrganizationsResponse{Organizations: []api.Organization{}}
 	query := url.Values{"limit": {"100"}}
+	seen := map[string]bool{query.Get("cursor"): true}
 	for {
 		var page api.OrganizationsResponse
 		if err := client.Get(ctx, "/api/v1/organizations", query, &page); err != nil {
@@ -420,13 +421,16 @@ func allOrganizations(ctx context.Context, client *api.Client) (api.Organization
 		if page.Pagination.Next == nil {
 			break
 		}
-		query.Set("cursor", *page.Pagination.Next)
+		if err := advanceCatalogCursor(query, *page.Pagination.Next, seen); err != nil {
+			return response, err
+		}
 	}
 	return response, nil
 }
 
 func allProjects(ctx context.Context, client *api.Client, query url.Values) (api.ProjectsResponse, error) {
 	response := api.ProjectsResponse{Projects: []api.Project{}}
+	seen := map[string]bool{query.Get("cursor"): true}
 	for {
 		var page api.ProjectsResponse
 		if err := client.Get(ctx, "/api/v1/projects", query, &page); err != nil {
@@ -436,13 +440,16 @@ func allProjects(ctx context.Context, client *api.Client, query url.Values) (api
 		if page.Pagination.Next == nil {
 			break
 		}
-		query.Set("cursor", *page.Pagination.Next)
+		if err := advanceCatalogCursor(query, *page.Pagination.Next, seen); err != nil {
+			return response, err
+		}
 	}
 	return response, nil
 }
 
 func allEnvironments(ctx context.Context, client *api.Client, query url.Values) (api.EnvironmentsResponse, error) {
 	response := api.EnvironmentsResponse{Environments: []api.Environment{}}
+	seen := map[string]bool{query.Get("cursor"): true}
 	for {
 		var page api.EnvironmentsResponse
 		if err := client.Get(ctx, "/api/v1/environments", query, &page); err != nil {
@@ -452,9 +459,20 @@ func allEnvironments(ctx context.Context, client *api.Client, query url.Values) 
 		if page.Pagination.Next == nil {
 			break
 		}
-		query.Set("cursor", *page.Pagination.Next)
+		if err := advanceCatalogCursor(query, *page.Pagination.Next, seen); err != nil {
+			return response, err
+		}
 	}
 	return response, nil
+}
+
+func advanceCatalogCursor(query url.Values, next string, seen map[string]bool) error {
+	if seen[next] {
+		return errors.New("pagination cursor repeated")
+	}
+	seen[next] = true
+	query.Set("cursor", next)
+	return nil
 }
 
 // formatMilliseconds and formatSum match how the Flare web pages show an
