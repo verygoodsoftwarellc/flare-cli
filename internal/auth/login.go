@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
@@ -128,6 +129,9 @@ func Login(ctx context.Context, baseURL string, open func(string) error, status 
 	result := &ExchangeResponse{}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(result); err != nil {
 		return nil, fmt.Errorf("decode authorization: %w", err)
+	}
+	if strings.TrimSpace(result.Token) == "" {
+		return nil, errors.New("exchange authorization: response did not include a token")
 	}
 	return result, nil
 }
