@@ -146,7 +146,11 @@ func OpenBrowser(address string) error {
 	default:
 		command = exec.Command("xdg-open", address)
 	}
-	return command.Start()
+	if err := command.Start(); err != nil {
+		return err
+	}
+	go func() { _ = command.Wait() }()
+	return nil
 }
 
 func randomValue() (string, error) {
