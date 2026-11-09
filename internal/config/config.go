@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -129,10 +130,63 @@ func (config *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+	if err := writeConfigFile(path, append(data, '\n')); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
 	return os.Chmod(path, 0o600)
+}
+
+// Write beside the existing file, so concurrent commands never read a truncated
+// config. Preserve symlinks used to keep configuration in another directory.
+func writeConfigFile(path string, data []byte) error {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	} else if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		// A dangling link has no previous file to preserve; keep its existing
+		// first-write behavior instead of replacing the link itself.
+		return os.WriteFile(path, data, 0o600)
+	}
+	// Replacing a directory entry would otherwise bypass a read-only file's
+	// write permissions. Retain the same permission check as in-place writes.
+	if existing, err := os.OpenFile(path, os.O_WRONLY, 0); err == nil {
+		if err := existing.Close(); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".flare-config-*")
+	if err != nil {
+		// A writable file in a read-only directory cannot be replaced. Keep
+		// the existing in-place behavior for that configuration.
+		if errors.Is(err, os.ErrPermission) {
+			return os.WriteFile(path, data, 0o600)
+		}
+		return err
+	}
+	defer os.Remove(temporary.Name())
+	defer temporary.Close()
+	if err := temporary.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary.Name(), path); err != nil {
+		if runtime.GOOS == "windows" {
+			return os.WriteFile(path, data, 0o600)
+		}
+		return err
+	}
+	return nil
 }
 
 func Path() (string, error) {
