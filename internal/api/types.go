@@ -65,6 +65,7 @@ type Window struct {
 type Overview struct {
 	Environment Environment `json:"environment"`
 	Window
+	Changes     []Change    `json:"changes,omitempty"`
 	DataThrough *string     `json:"data_through"`
 	Namespaces  []Namespace `json:"namespaces"`
 }
@@ -104,6 +105,7 @@ type SeriesEnvelope struct {
 type OperationSeriesResponse struct {
 	SeriesEnvelope
 	Selector Selector `json:"selector"`
+	Changes  []Change `json:"changes,omitempty"`
 }
 
 type RankedOperation struct {
@@ -174,4 +176,70 @@ type NamespaceResponse struct {
 	Window
 	Operations []Metric   `json:"operations"`
 	Pagination Pagination `json:"pagination"`
+}
+
+// Change is a deploy detected from the revision the Flare gem reports.
+// FinishedAt and RolloutSeconds are null while it is still rolling out, and
+// Bucket, the start of the series bucket it began in, is null when it began
+// before the window.
+type Change struct {
+	ID               int64    `json:"id"`
+	Kind             string   `json:"kind"`
+	Title            string   `json:"title"`
+	Revision         string   `json:"revision"`
+	PreviousRevision *string  `json:"previous_revision"`
+	Rollback         bool     `json:"rollback"`
+	OccurredAt       string   `json:"occurred_at"`
+	FinishedAt       *string  `json:"finished_at"`
+	RolloutSeconds   *float64 `json:"rollout_seconds"`
+	Bucket           *string  `json:"bucket"`
+}
+
+type ChangesResponse struct {
+	Environment Environment `json:"environment"`
+	Window
+	Changes []Change `json:"changes"`
+}
+
+type TraceSummary struct {
+	ID            int64   `json:"id"`
+	EnvironmentID int64   `json:"environment_id"`
+	RootName      string  `json:"root_name"`
+	StartedAt     string  `json:"started_at"`
+	DurationMS    float64 `json:"duration_ms"`
+	SpanCount     int64   `json:"span_count"`
+	Rule          *string `json:"rule"`
+}
+
+// TracesResponse pages newest first, so Pagination.Previous is always null.
+type TracesResponse struct {
+	Environment Environment    `json:"environment"`
+	Traces      []TraceSummary `json:"traces"`
+	Pagination  Pagination     `json:"pagination"`
+}
+
+// Span is one span of a trace, in tree order. Count is set when repeated
+// siblings were collapsed into it, and DurationMS is then their total.
+type Span struct {
+	ID         string  `json:"id"`
+	ParentID   *string `json:"parent_id,omitempty"`
+	Depth      int     `json:"depth"`
+	Name       string  `json:"name"`
+	Label      string  `json:"label,omitempty"`
+	Kind       string  `json:"kind"`
+	OffsetMS   float64 `json:"offset_ms"`
+	DurationMS float64 `json:"duration_ms"`
+	Source     string  `json:"source,omitempty"`
+	Count      int     `json:"count,omitempty"`
+}
+
+// TraceResponse is one trace and its spans. Available is false, with a
+// Message and no spans, until the spans arrive.
+type TraceResponse struct {
+	Trace     TraceSummary `json:"trace"`
+	Available bool         `json:"available"`
+	Message   string       `json:"message,omitempty"`
+	Collapsed bool         `json:"collapsed"`
+	Truncated bool         `json:"truncated"`
+	Spans     []Span       `json:"spans"`
 }

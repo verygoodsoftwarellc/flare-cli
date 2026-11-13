@@ -53,6 +53,7 @@ func newRootCommand(name string) *cobra.Command {
 		newEnvironmentCommand(options),
 		newMetricsCommand(options),
 		newMCPCommand(options),
+		newSetupCommand(options),
 	)
 	command.InitDefaultCompletionCmd()
 	rejectStrayArgs(command)
@@ -109,8 +110,10 @@ func (options *rootOptions) client() (*api.Client, error) {
 	login := options.loginCommand()
 	if os.Getenv("FLARE_TOKEN") != "" {
 		client.AuthHint = fmt.Sprintf("FLARE_TOKEN was rejected; replace it, or unset it and run %s.", login)
+		client.ScopeHint = "Replace FLARE_TOKEN with a token that has this scope."
 	} else {
 		client.AuthHint = fmt.Sprintf("Run %s to sign in again.", login)
+		client.ScopeHint = fmt.Sprintf("Run %s to get a token with every scope.", login)
 	}
 	return client, nil
 }
@@ -168,22 +171,11 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 				if err := verifyAuthentication(command.Context(), options.newClient(settings.APIURL, token)); err != nil {
 					return fmt.Errorf("token not saved: %w", err)
 				}
-			} else {
-				ctx, cancel := context.WithTimeout(command.Context(), 3*time.Minute)
-				defer cancel()
-				result, err := auth.Login(ctx, settings.APIURL, nil, options.errors)
-				if err != nil {
-					return err
-				}
-				token, expires = result.Token, expiryNote(result.ExpiresAt)
-			}
-			fallback, err := settings.StoreToken(token)
-			if err != nil {
+			} else if token, expires, err = options.browserLogin(command.Context(), settings.APIURL); err != nil {
 				return err
 			}
-			if fallback {
-				path, _ := config.Path()
-				fmt.Fprintf(options.errors, "warning: OS credential store unavailable; token saved mode 0600 in %s\n", path)
+			if err := options.storeToken(settings, token); err != nil {
+				return err
 			}
 			options.warnIfFlareTokenSet()
 			fmt.Fprintf(options.output, "Authenticated with %s%s\n", settings.APIURL, expires)
@@ -228,6 +220,30 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 	}
 	command.AddCommand(login, status, logout)
 	return command
+}
+
+// browserLogin signs in with PKCE through the browser and returns the new
+// token and a note saying when it expires.
+func (options *rootOptions) browserLogin(ctx context.Context, apiURL string) (string, string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	result, err := auth.Login(ctx, apiURL, nil, options.errors)
+	if err != nil {
+		return "", "", err
+	}
+	return result.Token, expiryNote(result.ExpiresAt), nil
+}
+
+func (options *rootOptions) storeToken(settings *config.Config, token string) error {
+	fallback, err := settings.StoreToken(token)
+	if err != nil {
+		return err
+	}
+	if fallback {
+		path, _ := config.Path()
+		fmt.Fprintf(options.errors, "warning: OS credential store unavailable; token saved mode 0600 in %s\n", path)
+	}
+	return nil
 }
 
 // expiryNote says when a new token stops working, in local time, or nothing if

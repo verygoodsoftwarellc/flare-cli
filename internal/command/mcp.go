@@ -63,6 +63,31 @@ type seriesInput struct {
 	selector
 }
 
+type changesInput struct {
+	EnvironmentID int64 `json:"environment_id"`
+	Hours         int   `json:"hours,omitempty"`
+}
+
+type tracesInput struct {
+	EnvironmentID int64  `json:"environment_id"`
+	Namespace     string `json:"namespace,omitempty"`
+	Target        string `json:"target,omitempty"`
+	Cursor        string `json:"cursor,omitempty"`
+	Limit         int    `json:"limit,omitempty"`
+}
+
+type traceInput struct {
+	ID int64 `json:"id"`
+}
+
+// traceableNamespaces are the namespaces Flare captures traces for.
+var traceableNamespaces = []string{"web", "job"}
+
+// maxTraceSpans is where get_trace starts collapsing repeated spans.
+const maxTraceSpans = 500
+
+const changesHelp = "changes lists the window's deploys, newest first, each with its revision and the bucket it began in (see list_changes)."
+
 type queryInput struct {
 	scope
 	selector
@@ -162,7 +187,7 @@ func newMCPServer(client *api.Client) *mcp.Server {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_environment_overviews",
-		Description: "Get bulk performance summaries for up to 25 Flare environments.",
+		Description: "Get bulk performance summaries for up to 25 Flare environments. " + changesHelp,
 		InputSchema: objectSchema(map[string]any{
 			"environment_ids": map[string]any{"type": "array", "items": positiveInteger, "minItems": 1, "maxItems": 25, "uniqueItems": true},
 			"hours":           hours,
@@ -314,7 +339,7 @@ func newMCPServer(client *api.Client) *mcp.Server {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_operation_series",
-		Description: "Mirror of the Flare operation page: stats and a time series for one environment namespace, narrowed to one operation by the service/target/operation selector from list_namespace_operations or get_namespace_overview (omit all three for the namespace total). " + windowHelp + " " + seriesHelp,
+		Description: "Mirror of the Flare operation page: stats and a time series for one environment namespace, narrowed to one operation by the service/target/operation selector from list_namespace_operations or get_namespace_overview (omit all three for the namespace total). " + windowHelp + " " + seriesHelp + " " + changesHelp,
 		InputSchema: objectSchema(mergeProperties(scopeProperties, selectorProperties), []string{"environment_id", "namespace"}),
 		Annotations: annotations,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input seriesInput) (*mcp.CallToolResult, api.OperationSeriesResponse, error) {
@@ -326,6 +351,98 @@ func newMCPServer(client *api.Client) *mcp.Server {
 		input.selector.apply(query)
 		var response api.OperationSeriesResponse
 		err := client.Get(ctx, "/api/v1/series", query, &response)
+		return nil, response, err
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "list_changes",
+		Description: "List the deploys in a Flare environment over a window, newest first, detected from the revision the Flare gem reports. " +
+			"Each has its revision and previous_revision, rollback, occurred_at and finished_at (null while still rolling out), " +
+			"rollout_seconds, and bucket: the start of the series bucket it began in, so it lines up with get_operation_series " +
+			"and query_metrics buckets for the same hours. get_operation_series and get_environment_overviews include these as changes already.",
+		InputSchema: objectSchema(map[string]any{"environment_id": positiveInteger, "hours": hours}, []string{"environment_id"}),
+		Annotations: annotations,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input changesInput) (*mcp.CallToolResult, api.ChangesResponse, error) {
+		if input.Hours == 0 {
+			input.Hours = 24
+		}
+		if input.EnvironmentID <= 0 {
+			return nil, api.ChangesResponse{}, fmt.Errorf("environment_id must be positive")
+		}
+		if !slices.Contains(allowedHours, input.Hours) {
+			return nil, api.ChangesResponse{}, fmt.Errorf("hours must be one of %s", joinInts(allowedHours))
+		}
+		query := url.Values{
+			"environment_id": {strconv.FormatInt(input.EnvironmentID, 10)},
+			"hours":          {strconv.Itoa(input.Hours)},
+		}
+		var response api.ChangesResponse
+		err := client.Get(ctx, "/api/v1/changes", query, &response)
+		return nil, response, err
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "list_traces",
+		Description: "List traces captured in a Flare environment, newest first: root_name, started_at, duration_ms, span_count, and the rule that captured it. " +
+			"Narrow to one operation with namespace (web or job) and target together, using the target from list_namespace_operations " +
+			"(e.g. UsersController#show or EventJob). Pass pagination.next as cursor for older traces. Read one with get_trace.",
+		InputSchema: objectSchema(map[string]any{
+			"environment_id": positiveInteger,
+			"namespace":      map[string]any{"type": "string", "enum": traceableNamespaces},
+			"target":         text,
+			"cursor":         pagination["cursor"],
+			"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
+		}, []string{"environment_id"}),
+		Annotations: annotations,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input tracesInput) (*mcp.CallToolResult, api.TracesResponse, error) {
+		if input.Limit == 0 {
+			input.Limit = 50
+		}
+		if input.EnvironmentID <= 0 {
+			return nil, api.TracesResponse{}, fmt.Errorf("environment_id must be positive")
+		}
+		if (input.Namespace == "") != (input.Target == "") {
+			return nil, api.TracesResponse{}, fmt.Errorf("namespace and target go together")
+		}
+		if input.Namespace != "" && !slices.Contains(traceableNamespaces, input.Namespace) {
+			return nil, api.TracesResponse{}, fmt.Errorf("traces are captured for web and job operations only")
+		}
+		if utf8.RuneCountInString(input.Target) > maxFilterLength {
+			return nil, api.TracesResponse{}, fmt.Errorf("target accepts at most %d characters", maxFilterLength)
+		}
+		if input.Limit < 1 || input.Limit > 100 {
+			return nil, api.TracesResponse{}, fmt.Errorf("limit must be between 1 and 100")
+		}
+		query := url.Values{
+			"environment_id": {strconv.FormatInt(input.EnvironmentID, 10)},
+			"limit":          {strconv.Itoa(input.Limit)},
+		}
+		if input.Namespace != "" {
+			query.Set("namespace", input.Namespace)
+			query.Set("target", input.Target)
+		}
+		if input.Cursor != "" {
+			query.Set("cursor", input.Cursor)
+		}
+		var response api.TracesResponse
+		err := client.Get(ctx, "/api/v1/traces", query, &response)
+		return nil, response, err
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "get_trace",
+		Description: "Get one captured trace's spans in tree order: name, label, kind (sql, cache, view, http, mailer, job, controller, other), " +
+			"depth, parent_id, offset_ms from the trace start, duration_ms, and source (file:line) when recorded. " +
+			"Past " + strconv.Itoa(maxTraceSpans) + " spans, repeated siblings (like an N+1's queries) are collapsed into one span with a count " +
+			"and their total duration_ms. available is false when the spans haven't arrived yet.",
+		InputSchema: objectSchema(map[string]any{"id": positiveInteger}, []string{"id"}),
+		Annotations: annotations,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input traceInput) (*mcp.CallToolResult, api.TraceResponse, error) {
+		if input.ID <= 0 {
+			return nil, api.TraceResponse{}, fmt.Errorf("id must be positive")
+		}
+		var response api.TraceResponse
+		err := client.Get(ctx, "/api/v1/traces/"+strconv.FormatInt(input.ID, 10), nil, &response)
 		return nil, response, err
 	})
 

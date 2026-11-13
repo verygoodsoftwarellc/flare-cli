@@ -19,10 +19,13 @@ import (
 const mcpServerName = "flare"
 
 type mcpInstaller struct {
-	lookPath   func(string) (string, error)
-	run        func(context.Context, string, ...string) (string, error)
-	executable string
-	output     io.Writer
+	lookPath func(string) (string, error)
+	run      func(context.Context, string, ...string) (string, error)
+	// runAttached runs a command with the terminal attached, for one that may
+	// ask the user something.
+	runAttached func(context.Context, string, ...string) error
+	executable  string
+	output      io.Writer
 }
 
 type mcpClientConfig struct {
@@ -36,6 +39,11 @@ type codexMCPTransport struct {
 	Env     map[string]string `json:"env"`
 	EnvVars []string          `json:"env_vars"`
 	Cwd     *string           `json:"cwd"`
+	// Streamable HTTP servers.
+	URL               string            `json:"url"`
+	BearerTokenEnvVar *string           `json:"bearer_token_env_var"`
+	HTTPHeaders       map[string]string `json:"http_headers"`
+	EnvHTTPHeaders    map[string]string `json:"env_http_headers"`
 }
 
 type codexMCPConfig struct {
@@ -48,6 +56,8 @@ type claudeMCPEntry struct {
 	Command string            `json:"command"`
 	Args    []string          `json:"args"`
 	Env     map[string]string `json:"env"`
+	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers"`
 }
 
 type claudeUserConfig struct {
@@ -73,31 +83,44 @@ func newMCPInstaller(output io.Writer) *mcpInstaller {
 			}
 			return strings.TrimSpace(string(result)), err
 		},
+		runAttached: func(ctx context.Context, name string, args ...string) error {
+			command := exec.CommandContext(ctx, name, args...)
+			command.Stdin = os.Stdin
+			command.Stdout = os.Stdout
+			command.Stderr = os.Stderr
+			return command.Run()
+		},
 		output: output,
 	}
 }
 
 func newMCPInstallCommand(options *rootOptions) *cobra.Command {
-	var clients []string
-	var dryRun bool
-	var force bool
+	var flags remoteFlags
+	var remote bool
 	command := &cobra.Command{
 		Use:   "install",
 		Short: "Configure Flare in installed MCP clients",
-		Args:  cobra.NoArgs,
+		Long: "Configure installed MCP clients to run this CLI's local Flare MCP server.\n\n" +
+			"With --remote, point them at Flare's hosted MCP server instead, the way `setup` does.",
+		Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
-			if !dryRun {
+			if remote {
+				return options.runRemoteSetup(command.Context(), flags)
+			}
+			if flags.useToken {
+				return errors.New("--token works only with --remote")
+			}
+			if !flags.dryRun {
 				if _, err := options.client(); err != nil {
 					return err
 				}
 			}
 			installer := newMCPInstaller(options.output)
-			return installer.install(command.Context(), clients, force, dryRun)
+			return installer.install(command.Context(), flags.clients, flags.force, flags.dryRun)
 		},
 	}
-	command.Flags().StringSliceVar(&clients, "client", nil, "MCP client to configure (codex or claude; repeatable)")
-	command.Flags().BoolVar(&dryRun, "dry-run", false, "show changes without applying them")
-	command.Flags().BoolVar(&force, "force", false, "replace an existing Flare MCP configuration")
+	flags.register(command, "MCP client to configure (codex or claude; with --remote also cursor or claude-desktop; repeatable)")
+	command.Flags().BoolVar(&remote, "remote", false, "use Flare's hosted MCP server instead of the local one")
 	return command
 }
 
@@ -316,18 +339,24 @@ func readClaudeUserConfig() (claudeMCPEntry, bool, *fileBackup, error) {
 }
 
 func (backup *fileBackup) restore() error {
-	directory := filepath.Dir(backup.path)
-	temporary, err := os.CreateTemp(directory, ".flare-claude-restore-*")
+	return writeFileAtomic(backup.path, backup.data, backup.mode.Perm())
+}
+
+// writeFileAtomic replaces path through a temporary file in the same
+// directory, so a crash leaves the old file or the new one, never half of it.
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	directory := filepath.Dir(path)
+	temporary, err := os.CreateTemp(directory, ".flare-cli-*")
 	if err != nil {
 		return err
 	}
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(backup.mode.Perm()); err != nil {
+	if err := temporary.Chmod(mode); err != nil {
 		temporary.Close()
 		return err
 	}
-	if _, err := temporary.Write(backup.data); err != nil {
+	if _, err := temporary.Write(data); err != nil {
 		temporary.Close()
 		return err
 	}
@@ -338,12 +367,12 @@ func (backup *fileBackup) restore() error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(temporaryPath, backup.path); err == nil {
+	if err := os.Rename(temporaryPath, path); err == nil {
 		return nil
 	} else if runtime.GOOS != "windows" {
 		return err
 	}
-	return os.WriteFile(backup.path, backup.data, backup.mode.Perm())
+	return os.WriteFile(path, data, mode)
 }
 
 func mcpConfigMissing(output string) bool {
