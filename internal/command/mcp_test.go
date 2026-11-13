@@ -32,8 +32,8 @@ func TestMCPInitializesListsAndCallsCuratedReadTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Tools) != 8 {
-		t.Fatalf("expected 8 curated tools, got %d", len(listed.Tools))
+	if len(listed.Tools) != 11 {
+		t.Fatalf("expected 11 curated tools, got %d", len(listed.Tools))
 	}
 	for _, tool := range listed.Tools {
 		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
@@ -69,6 +69,9 @@ func TestMCPToolsCallOnlyExpectedReadEndpoints(t *testing.T) {
 		{path: "/api/v1/namespaces/overview", query: "environment_id=18&hours=1&limit=10&namespace=job", response: `{"environment":{"id":18,"project_id":9,"name":"Production"},"namespace":"job","hours":1,"bucket":"minute","as_of":"2026-10-07T20:31:50Z","window_start":"2026-10-07T19:31:00Z","window_end":"2026-10-07T20:31:50Z","buckets":[],"data_through":null,"stats":{"count":0,"sum":0,"avg":0,"error_count":0,"error_rate":0,"impact":0},"series":{"count":[],"sum":[],"error_count":[]},"top_by_sum":[],"top_by_count":[]}`},
 		{path: "/api/v1/metrics/query", query: "direction=desc&environment_id=18&group_by=operation&hours=24&limit=10&min_count=5&namespace=web&series=true&sort=count&target=UsersController%23index", response: `{"environment":{"id":18,"project_id":9,"name":"Production"},"hours":24,"bucket":"hour","as_of":"2026-10-07T20:31:50Z","window_start":"2026-10-06T20:00:00Z","window_end":"2026-10-07T20:31:50Z","buckets":[],"filter":{"namespace":"web","target":"UsersController#index"},"group_by":["operation"],"sort":"count","direction":"desc","limit":10,"min_count":5,"data_through":null,"total":{"count":0,"sum":0,"avg":0,"error_count":0,"error_rate":0},"groups":[]}`},
 		{path: "/api/v1/series", query: "environment_id=18&hours=24&namespace=job&target=EventJob", response: `{"environment":{"id":18,"project_id":9,"name":"Production"},"namespace":"job","selector":{"target":"EventJob"},"hours":24,"bucket":"hour","as_of":"2026-10-07T20:31:50Z","window_start":"2026-10-06T20:00:00Z","window_end":"2026-10-07T20:31:50Z","buckets":[],"data_through":null,"stats":{"count":0,"sum":0,"avg":0,"error_count":0,"error_rate":0},"series":{"count":[],"sum":[],"error_count":[]}}`},
+		{path: "/api/v1/changes", query: "environment_id=18&hours=6", response: `{"environment":{"id":18,"project_id":9,"name":"Production"},"hours":6,"bucket":"minute","as_of":"2026-11-12T15:30:20Z","window_start":"2026-11-12T09:30:00Z","window_end":"2026-11-12T15:30:20Z","changes":[]}`},
+		{path: "/api/v1/traces", query: "cursor=older&environment_id=18&limit=10&namespace=web&target=UsersController%23show", response: `{"environment":{"id":18,"project_id":9,"name":"Production"},"traces":[],"pagination":{"next":null}}`},
+		{path: "/api/v1/traces/77", query: "", response: `{"trace":{"id":77,"environment_id":18,"root_name":"UsersController#show","started_at":"2026-11-12T15:00:00.000Z","duration_ms":50,"span_count":2,"rule":null},"available":false,"message":"not yet","spans":[]}`},
 	}
 	requestIndex := 0
 	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -94,6 +97,9 @@ func TestMCPToolsCallOnlyExpectedReadEndpoints(t *testing.T) {
 		{Name: "get_namespace_overview", Arguments: map[string]any{"environment_id": 18, "namespace": "job", "hours": 1}},
 		{Name: "query_metrics", Arguments: map[string]any{"environment_id": 18, "namespace": "web", "target": "UsersController#index", "group_by": []string{"operation"}, "sort": "count", "min_count": 5, "series": true}},
 		{Name: "get_operation_series", Arguments: map[string]any{"environment_id": 18, "namespace": "job", "target": "EventJob"}},
+		{Name: "list_changes", Arguments: map[string]any{"environment_id": 18, "hours": 6}},
+		{Name: "list_traces", Arguments: map[string]any{"environment_id": 18, "namespace": "web", "target": "UsersController#show", "limit": 10, "cursor": "older"}},
+		{Name: "get_trace", Arguments: map[string]any{"id": 77}},
 	}
 	for _, call := range calls {
 		result, err := session.CallTool(context.Background(), call)
@@ -149,6 +155,13 @@ func TestMCPRejectsInvalidArgumentsAndUnknownTools(t *testing.T) {
 		{name: "series limit above maximum", tool: "query_metrics", arguments: map[string]any{"environment_id": 11, "series": true, "limit": 26}},
 		{name: "impact is not a query sort", tool: "query_metrics", arguments: map[string]any{"environment_id": 11, "sort": "impact"}},
 		{name: "repeated group_by", tool: "query_metrics", arguments: map[string]any{"environment_id": 11, "group_by": []string{"target", "target"}}},
+		{name: "changes without environment", tool: "list_changes", arguments: map[string]any{}},
+		{name: "changes with unsupported hours", tool: "list_changes", arguments: map[string]any{"environment_id": 11, "hours": 3}},
+		{name: "traces target without namespace", tool: "list_traces", arguments: map[string]any{"environment_id": 11, "target": "UsersController#show"}},
+		{name: "traces namespace without target", tool: "list_traces", arguments: map[string]any{"environment_id": 11, "namespace": "web"}},
+		{name: "traces for an untraced namespace", tool: "list_traces", arguments: map[string]any{"environment_id": 11, "namespace": "db", "target": "users"}},
+		{name: "traces limit above maximum", tool: "list_traces", arguments: map[string]any{"environment_id": 11, "limit": 101}},
+		{name: "zero trace id", tool: "get_trace", arguments: map[string]any{"id": 0}},
 		{name: "unknown tool", tool: "missing_tool", arguments: map[string]any{}},
 	}
 	for _, test := range tests {
@@ -229,6 +242,47 @@ func TestMCPCancellationReachesFlareRequest(t *testing.T) {
 		t.Fatal("MCP cancellation did not reach Flare request")
 	}
 	<-done
+}
+
+func TestMCPPassesChangesAndSpansThrough(t *testing.T) {
+	change := `{"id":5,"kind":"deploy","title":"Deployed 2222222","revision":"2222222bbbb","previous_revision":"1111111aaaa","rollback":false,"occurred_at":"2026-11-12T15:10:20Z","finished_at":null,"rollout_seconds":null,"bucket":"2026-11-12T15:00:00Z"}`
+	responses := map[string]string{
+		"/api/v1/series":    `{"environment":{"id":18,"project_id":9,"name":"Production"},"namespace":"web","selector":{},"hours":24,"bucket":"hour","buckets":[],"data_through":null,"stats":{"count":0,"sum":0,"avg":0,"error_count":0,"error_rate":0},"series":{"count":[],"sum":[],"error_count":[]},"changes":[` + change + `]}`,
+		"/api/v1/overviews": `{"overviews":[{"environment":{"id":18,"project_id":9,"name":"Production"},"hours":24,"changes":[` + change + `],"data_through":null,"namespaces":[]}]}`,
+		"/api/v1/traces/7":  `{"trace":{"id":7,"environment_id":18,"root_name":"UsersController#show","started_at":"2026-11-12T15:00:00.000Z","duration_ms":50,"span_count":2,"rule":"UsersController#show"},"available":true,"collapsed":true,"truncated":false,"spans":[{"id":"a","depth":0,"name":"process_action.action_controller","label":"UsersController#show","kind":"controller","offset_ms":0,"duration_ms":50},{"id":"b","parent_id":"a","depth":1,"name":"sql.active_record","label":"User Load","kind":"sql","offset_ms":10.5,"duration_ms":40,"source":"app/models/user.rb:3","count":12}]}`,
+	}
+	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = writer.Write([]byte(responses[request.URL.Path]))
+	}))
+	defer apiServer.Close()
+	session := connectMCPClient(t, newMCPServer(api.New(apiServer.URL, "flare_pat_test")))
+
+	call := func(name string, arguments map[string]any) map[string]any {
+		t.Helper()
+		result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: arguments})
+		if err != nil || result.IsError {
+			t.Fatalf("call %s: result=%#v err=%v", name, result, err)
+		}
+		return result.StructuredContent.(map[string]any)
+	}
+	revision := func(changes any) any {
+		return changes.([]any)[0].(map[string]any)["revision"]
+	}
+	if got := revision(call("get_operation_series", map[string]any{"environment_id": 18, "namespace": "web"})["changes"]); got != "2222222bbbb" {
+		t.Fatalf("series change revision = %v", got)
+	}
+	overview := call("get_environment_overviews", map[string]any{"environment_ids": []int{18}})["overviews"].([]any)[0].(map[string]any)
+	if got := revision(overview["changes"]); got != "2222222bbbb" {
+		t.Fatalf("overview change revision = %v", got)
+	}
+	spans := call("get_trace", map[string]any{"id": 7})["spans"].([]any)
+	collapsed := spans[1].(map[string]any)
+	if collapsed["count"] != float64(12) || collapsed["parent_id"] != "a" || collapsed["offset_ms"] != 10.5 || collapsed["source"] != "app/models/user.rb:3" {
+		t.Fatalf("collapsed span = %#v", collapsed)
+	}
+	if _, present := spans[0].(map[string]any)["parent_id"]; present {
+		t.Fatalf("root span should have no parent_id: %#v", spans[0])
+	}
 }
 
 func connectMCPClient(t *testing.T, server *mcp.Server) *mcp.ClientSession {

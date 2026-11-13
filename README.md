@@ -63,14 +63,35 @@ Add `--json` to any data command for stable machine-readable output.
 
 ## MCP
 
-Authenticate once, then configure every supported MCP client installed on your machine:
+One command signs you in and connects every supported AI client on your machine to Flare's hosted MCP server at `https://flare.am/mcp`:
+
+```sh
+flare-cli setup
+```
+
+It finds Claude Code, Codex, Cursor and Claude Desktop, configures each one for the server (Claude Code and Codex through their own `mcp add` commands, Cursor in `~/.cursor/mcp.json`, keeping your other servers), checks the server with an MCP `initialize` and `tools/list`, and prints a first question to ask. Claude Desktop has no file for remote servers, so `setup` tells you how to add Flare as a custom connector instead.
+
+Each client signs in to Flare itself, in your browser, the first time it connects: `/mcp` in Claude Code, `codex mcp login flare` in Codex, and Cursor's MCP settings. For a client that can't sign in on its own (a machine with no browser, say), `--token` writes your personal access token into its configuration instead. Codex can't store a header from its CLI, so with `--token` it reads the token from `FLARE_TOKEN`.
+
+```sh
+flare-cli setup --dry-run
+flare-cli setup --client cursor
+flare-cli setup --force
+flare-cli setup --token
+```
+
+`setup` leaves a client's existing `flare` server alone unless it already matches; `--force` replaces it. `flare-cli mcp install --remote --client <name>` does the same as `setup` for chosen clients.
+
+### Local MCP server
+
+`flare-cli mcp` runs the same tools as a local stdio server that calls Flare's read API with your personal access token, for clients or machines where the hosted server doesn't fit. Configure it with:
 
 ```sh
 flare-cli auth login
 flare-cli mcp install
 ```
 
-The installer currently supports Codex and Claude Code. It uses the absolute path to `flare-cli`, is safe to run again, and never copies your personal access token into another application's configuration. To target one client, preview changes, or intentionally replace an existing `flare` server:
+The local installer supports Codex and Claude Code. It uses the absolute path to `flare-cli`, is safe to run again, and never copies your personal access token into another application's configuration. To target one client, preview changes, or intentionally replace an existing `flare` server:
 
 ```sh
 flare-cli mcp install --client codex
@@ -97,4 +118,4 @@ It has this shape:
 }
 ```
 
-It exposes only the eight curated read tools corresponding to the CLI commands: the three catalog tools, the presets `get_environment_overviews`, `get_namespace_overview`, `list_namespace_operations`, and `get_operation_series`, and the generic `query_metrics`. It does not expose any write operation.
+It exposes the same eleven read tools as the hosted server: the three catalog tools, the presets `get_environment_overviews`, `get_namespace_overview`, `list_namespace_operations`, and `get_operation_series`, the generic `query_metrics`, deploys with `list_changes`, and captured traces with `list_traces` and `get_trace`. It does not expose any write operation. The trace tools need the `traces:read` scope, which `auth login` grants; a token from before it existed gets a 403 naming the scope, and signing in again fixes it.

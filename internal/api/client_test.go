@@ -68,3 +68,19 @@ func TestGetAddsAuthHintOnlyToUnauthorizedErrors(t *testing.T) {
 		t.Fatalf("hint should only follow 401s, got %v", err)
 	}
 }
+
+func TestGetAddsScopeHintToForbiddenErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusForbidden)
+		_, _ = writer.Write([]byte(`{"detail":"This token requires the traces:read scope.","request_id":"abc"}`))
+	}))
+	defer server.Close()
+
+	client := New(server.URL, "flare_pat_old")
+	client.AuthHint = "Run `flare-cli auth login` to sign in again."
+	client.ScopeHint = "Run `flare-cli auth login` to get a token with every scope."
+	err := client.Get(context.Background(), "/api/v1/traces", nil, &map[string]any{})
+	if err == nil || err.Error() != "This token requires the traces:read scope. Run `flare-cli auth login` to get a token with every scope. (request abc)" {
+		t.Fatalf("unexpected forbidden error %v", err)
+	}
+}
