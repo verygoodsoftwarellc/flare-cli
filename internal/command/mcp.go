@@ -63,11 +63,6 @@ type seriesInput struct {
 	selector
 }
 
-type changesInput struct {
-	EnvironmentID int64 `json:"environment_id"`
-	Hours         int   `json:"hours,omitempty"`
-}
-
 type tracesInput struct {
 	EnvironmentID int64  `json:"environment_id"`
 	Namespace     string `json:"namespace,omitempty"`
@@ -362,22 +357,13 @@ func newMCPServer(client *api.Client) *mcp.Server {
 			"and query_metrics buckets for the same hours. get_operation_series and get_environment_overviews include these as changes already.",
 		InputSchema: objectSchema(map[string]any{"environment_id": positiveInteger, "hours": hours}, []string{"environment_id"}),
 		Annotations: annotations,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input changesInput) (*mcp.CallToolResult, api.ChangesResponse, error) {
-		if input.Hours == 0 {
-			input.Hours = 24
-		}
-		if input.EnvironmentID <= 0 {
-			return nil, api.ChangesResponse{}, fmt.Errorf("environment_id must be positive")
-		}
-		if !slices.Contains(allowedHours, input.Hours) {
-			return nil, api.ChangesResponse{}, fmt.Errorf("hours must be one of %s", joinInts(allowedHours))
-		}
-		query := url.Values{
-			"environment_id": {strconv.FormatInt(input.EnvironmentID, 10)},
-			"hours":          {strconv.Itoa(input.Hours)},
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input scope) (*mcp.CallToolResult, api.ChangesResponse, error) {
+		input.setDefaults()
+		if err := input.validate(false); err != nil {
+			return nil, api.ChangesResponse{}, err
 		}
 		var response api.ChangesResponse
-		err := client.Get(ctx, "/api/v1/changes", query, &response)
+		err := client.Get(ctx, "/api/v1/changes", input.values(), &response)
 		return nil, response, err
 	})
 
@@ -399,33 +385,29 @@ func newMCPServer(client *api.Client) *mcp.Server {
 			input.Limit = 50
 		}
 		if input.EnvironmentID <= 0 {
-			return nil, api.TracesResponse{}, fmt.Errorf("environment_id must be positive")
+			return nil, api.TracesResponse{}, errors.New("environment is required")
 		}
 		if (input.Namespace == "") != (input.Target == "") {
-			return nil, api.TracesResponse{}, fmt.Errorf("namespace and target go together")
+			return nil, api.TracesResponse{}, errors.New("namespace and target go together")
 		}
 		if input.Namespace != "" && !slices.Contains(traceableNamespaces, input.Namespace) {
-			return nil, api.TracesResponse{}, fmt.Errorf("traces are captured for web and job operations only")
+			return nil, api.TracesResponse{}, errors.New("traces are captured for web and job operations only")
 		}
-		if utf8.RuneCountInString(input.Target) > maxFilterLength {
-			return nil, api.TracesResponse{}, fmt.Errorf("target accepts at most %d characters", maxFilterLength)
+		target := selector{Target: input.Target}
+		if err := target.validate(); err != nil {
+			return nil, api.TracesResponse{}, err
 		}
-		if input.Limit < 1 || input.Limit > 100 {
-			return nil, api.TracesResponse{}, fmt.Errorf("limit must be between 1 and 100")
+		query, err := catalogQuery(input.Cursor, input.Limit)
+		if err != nil {
+			return nil, api.TracesResponse{}, err
 		}
-		query := url.Values{
-			"environment_id": {strconv.FormatInt(input.EnvironmentID, 10)},
-			"limit":          {strconv.Itoa(input.Limit)},
-		}
+		query.Set("environment_id", strconv.FormatInt(input.EnvironmentID, 10))
 		if input.Namespace != "" {
 			query.Set("namespace", input.Namespace)
-			query.Set("target", input.Target)
-		}
-		if input.Cursor != "" {
-			query.Set("cursor", input.Cursor)
+			target.apply(query)
 		}
 		var response api.TracesResponse
-		err := client.Get(ctx, "/api/v1/traces", query, &response)
+		err = client.Get(ctx, "/api/v1/traces", query, &response)
 		return nil, response, err
 	})
 

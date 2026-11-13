@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -152,7 +153,8 @@ func (installer *mcpInstaller) install(ctx context.Context, requested []string, 
 	if err != nil {
 		return err
 	}
-	clients, err := installer.resolveClients(requested)
+	noneFound := errors.New("no supported MCP clients found; use `flare-cli mcp config` for manual setup")
+	clients, err := installer.resolveClients(requested, []string{"codex", "claude"}, noneFound)
 	if err != nil {
 		return err
 	}
@@ -170,31 +172,33 @@ func (installer *mcpInstaller) install(ctx context.Context, requested []string, 
 	return nil
 }
 
-func (installer *mcpInstaller) resolveClients(requested []string) ([]string, error) {
+// resolveClients returns the requested clients, or every supported one found
+// on this machine (noneFound if there are none). Claude Code and Codex are
+// configured through their own CLIs, so those must be installed even when
+// asked for by name.
+func (installer *mcpInstaller) resolveClients(requested, supported []string, noneFound error) ([]string, error) {
 	if len(requested) == 0 {
-		for _, name := range []string{"codex", "claude"} {
-			if _, err := installer.lookPath(name); err == nil {
+		for _, name := range supported {
+			if installer.detect(name) {
 				requested = append(requested, name)
 			}
 		}
 		if len(requested) == 0 {
-			return nil, errors.New("no supported MCP clients found; use `flare-cli mcp config` for manual setup")
+			return nil, noneFound
 		}
 	}
-	seen := make(map[string]bool, len(requested))
 	clients := make([]string, 0, len(requested))
 	for _, name := range requested {
 		name = strings.ToLower(strings.TrimSpace(name))
-		if name != "codex" && name != "claude" {
-			return nil, fmt.Errorf("unsupported MCP client %q; use codex or claude", name)
+		if !slices.Contains(supported, name) {
+			return nil, fmt.Errorf("unsupported MCP client %q; use %s", name, strings.Join(supported, ", "))
 		}
-		if seen[name] {
+		if slices.Contains(clients, name) {
 			continue
 		}
-		if _, err := installer.lookPath(name); err != nil {
+		if (name == "claude" || name == "codex") && !installer.detect(name) {
 			return nil, fmt.Errorf("%s is not installed or not on PATH", name)
 		}
-		seen[name] = true
 		clients = append(clients, name)
 	}
 	return clients, nil
@@ -326,16 +330,12 @@ func readClaudeUserConfig() (claudeMCPEntry, bool, *fileBackup, error) {
 	if err != nil {
 		return claudeMCPEntry{}, false, nil, err
 	}
-	backupPath := path
-	if resolved, resolveErr := filepath.EvalSymlinks(path); resolveErr == nil {
-		backupPath = resolved
-	}
 	var config claudeUserConfig
 	if err := json.Unmarshal(data, &config); err != nil {
 		return claudeMCPEntry{}, false, nil, err
 	}
 	entry, found := config.MCPServers[mcpServerName]
-	return entry, found, &fileBackup{path: backupPath, data: data, mode: info.Mode()}, nil
+	return entry, found, &fileBackup{path: path, data: data, mode: info.Mode()}, nil
 }
 
 func (backup *fileBackup) restore() error {
@@ -344,7 +344,11 @@ func (backup *fileBackup) restore() error {
 
 // writeFileAtomic replaces path through a temporary file in the same
 // directory, so a crash leaves the old file or the new one, never half of it.
+// A symlinked file (dotfiles) is written through rather than replaced.
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
 	directory := filepath.Dir(path)
 	temporary, err := os.CreateTemp(directory, ".flare-cli-*")
 	if err != nil {

@@ -10,13 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
+	"github.com/verygoodsoftwarellc/flare-cli/internal/config"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/version"
 )
 
@@ -41,12 +41,9 @@ const firstPrompt = "Using Flare, what's slowest in production over the last 24 
 // with OAuth, unless useToken writes the CLI's personal access token into
 // their configuration instead.
 type remoteSetup struct {
+	remoteFlags
 	installer *mcpInstaller
 	url       string
-	clients   []string
-	useToken  bool
-	force     bool
-	dryRun    bool
 	signIn    func(context.Context) (string, error)
 	verify    func(ctx context.Context, endpoint, token string) (int, error)
 }
@@ -94,21 +91,21 @@ func (options *rootOptions) runRemoteSetup(ctx context.Context, flags remoteFlag
 		return err
 	}
 	setup := &remoteSetup{
-		installer: newMCPInstaller(options.output),
-		url:       strings.TrimRight(settings.APIURL, "/") + "/mcp",
-		clients:   flags.clients,
-		useToken:  flags.useToken,
-		force:     flags.force,
-		dryRun:    flags.dryRun,
-		signIn:    options.ensureSignedIn,
-		verify:    verifyRemoteMCP,
+		remoteFlags: flags,
+		installer:   newMCPInstaller(options.output),
+		url:         strings.TrimRight(settings.APIURL, "/") + "/mcp",
+		signIn: func(ctx context.Context) (string, error) {
+			return options.ensureSignedIn(ctx, settings)
+		},
+		verify: verifyRemoteMCP,
 	}
 	return setup.run(ctx)
 }
 
 func (setup *remoteSetup) run(ctx context.Context) error {
 	output := setup.installer.output
-	clients, err := setup.installer.resolveRemoteClients(setup.clients, setup.url)
+	noneFound := fmt.Errorf("no supported MCP clients found; add %s to your MCP client as a remote (streamable HTTP) server", setup.url)
+	clients, err := setup.installer.resolveClients(setup.clients, remoteMCPClients, noneFound)
 	if err != nil {
 		return err
 	}
@@ -163,39 +160,6 @@ func (setup *remoteSetup) run(ctx context.Context) error {
 		fmt.Fprintf(output, "%s: %q\n", lead, firstPrompt)
 	}
 	return errors.Join(failures...)
-}
-
-// resolveRemoteClients returns the requested clients, or every one found on
-// this machine. Claude Code and Codex are configured through their own CLIs,
-// so those must be installed even when asked for by name.
-func (installer *mcpInstaller) resolveRemoteClients(requested []string, url string) ([]string, error) {
-	if len(requested) == 0 {
-		for _, name := range remoteMCPClients {
-			if installer.detect(name) {
-				requested = append(requested, name)
-			}
-		}
-		if len(requested) == 0 {
-			return nil, fmt.Errorf("no supported MCP clients found; add %s to your MCP client as a remote (streamable HTTP) server", url)
-		}
-	}
-	clients := make([]string, 0, len(requested))
-	for _, name := range requested {
-		name = strings.ToLower(strings.TrimSpace(name))
-		if !slices.Contains(remoteMCPClients, name) {
-			return nil, fmt.Errorf("unsupported MCP client %q; use %s", name, strings.Join(remoteMCPClients, ", "))
-		}
-		if slices.Contains(clients, name) {
-			continue
-		}
-		if name == "claude" || name == "codex" {
-			if _, err := installer.lookPath(name); err != nil {
-				return nil, fmt.Errorf("%s is not installed or not on PATH", name)
-			}
-		}
-		clients = append(clients, name)
-	}
-	return clients, nil
 }
 
 func (installer *mcpInstaller) detect(client string) bool {
@@ -265,17 +229,20 @@ func (installer *mcpInstaller) installClaudeRemote(ctx context.Context, remote r
 		if !remote.force {
 			return "", errors.New("Claude Code already has a different Flare MCP configuration; rerun with --force to replace it")
 		}
-		if remote.dryRun {
-			fmt.Fprintf(installer.output, "Would replace Claude Code's Flare configuration: claude %s\n", hideToken(shellJoin(args), remote.token))
-			return claudeSignInHint(remote), nil
+	}
+	if remote.dryRun {
+		action := "Would run"
+		if found {
+			action = "Would replace Claude Code's Flare configuration"
 		}
+		fmt.Fprintf(installer.output, "%s: claude %s\n", action, hideToken(shellJoin(args), remote.token))
+		return claudeSignInHint(remote), nil
+	}
+	if found {
 		removeOutput, removeErr := installer.run(ctx, "claude", "mcp", "remove", mcpServerName, "-s", "user")
 		if removeErr != nil {
 			return "", fmt.Errorf("remove existing Claude Code MCP configuration: %s", commandFailure(removeOutput, removeErr))
 		}
-	} else if remote.dryRun {
-		fmt.Fprintf(installer.output, "Would run: claude %s\n", hideToken(shellJoin(args), remote.token))
-		return claudeSignInHint(remote), nil
 	}
 	output, err := installer.run(ctx, "claude", args...)
 	if err != nil {
@@ -314,7 +281,8 @@ func (installer *mcpInstaller) installCodexRemote(ctx context.Context, remote re
 		hint = "set FLARE_TOKEN to your token wherever Codex runs; Codex reads it from there"
 	}
 	output, err := installer.run(ctx, "codex", "mcp", "get", mcpServerName, "--json")
-	if err == nil {
+	exists := err == nil
+	if exists {
 		var current codexMCPConfig
 		if unmarshalErr := json.Unmarshal([]byte(output), &current); unmarshalErr != nil {
 			return "", fmt.Errorf("inspect Codex MCP configuration: decode response: %w", unmarshalErr)
@@ -330,14 +298,15 @@ func (installer *mcpInstaller) installCodexRemote(ctx context.Context, remote re
 		if !matching && !remote.force {
 			return "", errors.New("Codex already has a different Flare MCP configuration; rerun with --force to replace it")
 		}
-		if remote.dryRun {
-			fmt.Fprintf(installer.output, "Would replace Codex's Flare configuration: codex %s\n", strings.Join(args, " "))
-			return hint, nil
-		}
 	} else if !mcpConfigMissing(output) {
 		return "", fmt.Errorf("inspect Codex MCP configuration: %s", commandFailure(output, err))
-	} else if remote.dryRun {
-		fmt.Fprintf(installer.output, "Would run: codex %s\n", strings.Join(args, " "))
+	}
+	if remote.dryRun {
+		action := "Would run"
+		if exists {
+			action = "Would replace Codex's Flare configuration"
+		}
+		fmt.Fprintf(installer.output, "%s: codex %s\n", action, strings.Join(args, " "))
 		return hint, nil
 	}
 	if err := installer.runAttached(ctx, "codex", args...); err != nil {
@@ -361,10 +330,6 @@ func (installer *mcpInstaller) installCursorRemote(remote remoteInstall) (string
 	}
 	path := filepath.Join(home, ".cursor", "mcp.json")
 	shown := filepath.Join("~", ".cursor", "mcp.json")
-	// Write through a symlinked file (dotfiles) rather than replacing the link.
-	if resolved, resolveErr := filepath.EvalSymlinks(path); resolveErr == nil {
-		path = resolved
-	}
 
 	document := map[string]json.RawMessage{}
 	servers := map[string]json.RawMessage{}
@@ -516,11 +481,7 @@ func (transport bearerTransport) RoundTrip(request *http.Request) (*http.Respons
 
 // ensureSignedIn returns a working token, signing in through the browser when
 // there is none or the stored one has expired.
-func (options *rootOptions) ensureSignedIn(ctx context.Context) (string, error) {
-	settings, err := options.config()
-	if err != nil {
-		return "", err
-	}
+func (options *rootOptions) ensureSignedIn(ctx context.Context, settings *config.Config) (string, error) {
 	if token, tokenErr := settings.TokenValue(); tokenErr == nil {
 		err := verifyAuthentication(ctx, options.newClient(settings.APIURL, token))
 		if err == nil {

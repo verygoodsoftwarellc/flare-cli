@@ -330,22 +330,22 @@ func TestRemoteSetupClientSelection(t *testing.T) {
 	setup := newTestRemoteSetup(t, &bytes.Buffer{}, &fakeRemote{})
 	installer := setup.installer
 
-	clients, err := installer.resolveRemoteClients(nil, testRemoteURL)
+	clients, err := installer.resolveClients(nil, remoteMCPClients, nil)
 	if err != nil || !reflect.DeepEqual(clients, []string{"claude", "codex"}) {
 		t.Fatalf("detected %v, %v; want claude and codex only", clients, err)
 	}
-	if clients, err := installer.resolveRemoteClients([]string{"Cursor", "cursor", "claude-desktop"}, testRemoteURL); err != nil || !reflect.DeepEqual(clients, []string{"cursor", "claude-desktop"}) {
+	if clients, err := installer.resolveClients([]string{"Cursor", "cursor", "claude-desktop"}, remoteMCPClients, nil); err != nil || !reflect.DeepEqual(clients, []string{"cursor", "claude-desktop"}) {
 		t.Fatalf("named clients = %v, %v", clients, err)
 	}
-	if _, err := installer.resolveRemoteClients([]string{"vscode"}, testRemoteURL); err == nil || !strings.Contains(err.Error(), "unsupported MCP client") {
+	if _, err := installer.resolveClients([]string{"vscode"}, remoteMCPClients, nil); err == nil || !strings.Contains(err.Error(), "unsupported MCP client") {
 		t.Fatalf("error = %v", err)
 	}
 
 	installer.lookPath = func(string) (string, error) { return "", errors.New("not found") }
-	if _, err := installer.resolveRemoteClients([]string{"codex"}, testRemoteURL); err == nil || !strings.Contains(err.Error(), "not installed") {
+	if _, err := installer.resolveClients([]string{"codex"}, remoteMCPClients, nil); err == nil || !strings.Contains(err.Error(), "not installed") {
 		t.Fatalf("error = %v", err)
 	}
-	if _, err := installer.resolveRemoteClients(nil, testRemoteURL); err == nil || !strings.Contains(err.Error(), testRemoteURL) {
+	if err := setup.run(context.Background()); err == nil || !strings.Contains(err.Error(), testRemoteURL) {
 		t.Fatalf("error = %v", err)
 	}
 }
