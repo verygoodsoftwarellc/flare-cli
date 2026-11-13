@@ -441,7 +441,15 @@ func TestUnauthorizedResponsesExplainHowToSignInAgain(t *testing.T) {
 			t.Setenv("FLARE_TOKEN", "flare_pat_revoked")
 		}
 		t.Setenv("FLARE_API_URL", server.URL)
-		for _, args := range [][]string{{"org", "list"}, {"auth", "status"}} {
+		commands := [][]string{{"org", "list"}, {"auth", "status"}}
+		if test.envToken {
+			// Regression: ISSUE-001 — setup dropped the FLARE_TOKEN hint on a 401
+			// Found by /qa on 2026-11-13
+			// Report: .nunebot/qa-reports/qa-report-flare-cli-setup-2026-11-13.md
+			// Without FLARE_TOKEN, setup signs in again instead of failing.
+			commands = append(commands, []string{"setup", "--client", "cursor"})
+		}
+		for _, args := range commands {
 			if test.flag {
 				args = append(args, "--api-url", server.URL)
 			}

@@ -106,7 +106,13 @@ func (options *rootOptions) client() (*api.Client, error) {
 	if err != nil {
 		return nil, options.authenticationError(err)
 	}
-	client := options.newClient(settings.APIURL, token)
+	return options.tokenClient(settings.APIURL, token), nil
+}
+
+// tokenClient is a client whose 401 and 403 errors say how to get a working
+// token.
+func (options *rootOptions) tokenClient(apiURL, token string) *api.Client {
+	client := options.newClient(apiURL, token)
 	login := options.loginCommand()
 	if os.Getenv("FLARE_TOKEN") != "" {
 		client.AuthHint = fmt.Sprintf("FLARE_TOKEN was rejected; replace it, or unset it and run %s.", login)
@@ -115,7 +121,7 @@ func (options *rootOptions) client() (*api.Client, error) {
 		client.AuthHint = fmt.Sprintf("Run %s to sign in again.", login)
 		client.ScopeHint = fmt.Sprintf("Run %s to get a token with every scope.", login)
 	}
-	return client, nil
+	return client
 }
 
 func (options *rootOptions) newClient(apiURL, token string) *api.Client {

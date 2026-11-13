@@ -483,7 +483,7 @@ func (transport bearerTransport) RoundTrip(request *http.Request) (*http.Respons
 // there is none or the stored one has expired.
 func (options *rootOptions) ensureSignedIn(ctx context.Context, settings *config.Config) (string, error) {
 	if token, tokenErr := settings.TokenValue(); tokenErr == nil {
-		err := verifyAuthentication(ctx, options.newClient(settings.APIURL, token))
+		err := verifyAuthentication(ctx, options.tokenClient(settings.APIURL, token))
 		if err == nil {
 			fmt.Fprintf(options.output, "Signed in to %s\n", settings.APIURL)
 			return token, nil
