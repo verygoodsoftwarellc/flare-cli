@@ -362,6 +362,13 @@ func (installer *mcpInstaller) installCursorRemote(remote remoteInstall) (string
 	}
 	if current, ok := servers[mcpServerName]; ok {
 		if sameJSON(current, entry) {
+			// The entry holds the token, so keep the file private even when
+			// something else loosened its mode since it was written.
+			if remote.token != "" && mode&0o077 != 0 && !remote.dryRun {
+				if err := os.Chmod(path, 0o600); err != nil {
+					return "", fmt.Errorf("restrict %s: %w", shown, err)
+				}
+			}
 			fmt.Fprintln(installer.output, "Cursor is already configured for Flare")
 			return "", nil
 		}
@@ -449,8 +456,13 @@ func verifyRemoteMCP(ctx context.Context, endpoint, token string) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	transport := &mcp.StreamableClientTransport{
-		Endpoint:             endpoint,
-		HTTPClient:           &http.Client{Transport: bearerTransport{token: token, base: http.DefaultTransport}},
+		Endpoint: endpoint,
+		HTTPClient: &http.Client{
+			Transport: bearerTransport{token: token, base: http.DefaultTransport},
+			// bearerTransport adds the token to every request it sends, so a
+			// followed redirect would hand it to whatever host it points at.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 		MaxRetries:           -1,
 		DisableStandaloneSSE: true,
 	}

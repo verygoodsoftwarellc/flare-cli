@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -377,5 +378,52 @@ func TestMCPInstallTokenNeedsRemote(t *testing.T) {
 	root.SetOut(&bytes.Buffer{})
 	if err := root.ExecuteContext(context.Background()); err == nil || err.Error() != "--token works only with --remote" {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestVerifyRemoteMCPDoesNotFollowRedirectsWithTheToken(t *testing.T) {
+	var leaked atomic.Bool
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "" {
+			leaked.Store(true)
+		}
+		http.Error(writer, "nope", http.StatusNotFound)
+	}))
+	defer elsewhere.Close()
+	remote := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.Redirect(writer, request, elsewhere.URL+"/mcp", http.StatusTemporaryRedirect)
+	}))
+	defer remote.Close()
+
+	if _, err := verifyRemoteMCP(context.Background(), remote.URL, "flare_pat_good"); err == nil {
+		t.Fatal("expected a redirect to fail the check")
+	}
+	if leaked.Load() {
+		t.Fatal("the token followed the redirect to another host")
+	}
+}
+
+func TestRemoteSetupMakesAMatchingCursorTokenConfigPrivate(t *testing.T) {
+	setup := newTestRemoteSetup(t, &bytes.Buffer{}, &fakeRemote{})
+	setup.useToken = true
+	setup.clients = []string{"cursor"}
+	cursor := `{"mcpServers":{"flare":{"url":"` + testRemoteURL + `","headers":{"Authorization":"Bearer flare_pat_secret"}}}}`
+	writeTestFile(t, cursorConfigPath(t), cursor)
+	if err := os.Chmod(cursorConfigPath(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := setup.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(cursorConfigPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %v, want 0600", info.Mode().Perm())
+	}
+	if data, _ := os.ReadFile(cursorConfigPath(t)); string(data) != cursor {
+		t.Fatalf("Cursor config was rewritten: %s", data)
 	}
 }
