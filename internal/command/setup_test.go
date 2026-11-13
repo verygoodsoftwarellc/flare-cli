@@ -416,12 +416,14 @@ func TestRemoteSetupMakesAMatchingCursorTokenConfigPrivate(t *testing.T) {
 	if err := setup.run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Stat(cursorConfigPath(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode = %v, want 0600", info.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(cursorConfigPath(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("mode = %v, want 0600", info.Mode().Perm())
+		}
 	}
 	if data, _ := os.ReadFile(cursorConfigPath(t)); string(data) != cursor {
 		t.Fatalf("Cursor config was rewritten: %s", data)
