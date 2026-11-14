@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
@@ -254,6 +255,41 @@ func TestMCPProxyAnswersARequestFlareDroppedOrCouldNotReach(t *testing.T) {
 	if message, _ := replies["2"]["error"].(map[string]any)["message"].(string); !strings.HasPrefix(message, "request Flare:") {
 		t.Fatalf("reply = %v", replies["2"])
 	}
+}
+
+func TestMCPProxyGivesUpOnAStalledRequest(t *testing.T) {
+	release := make(chan struct{})
+	remote := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost && strings.Contains(readBody(request), `"tools/list"`) {
+			writer.Header().Set("Content-Type", "text/event-stream")
+			writer.WriteHeader(http.StatusOK)
+			writer.(http.Flusher).Flush()
+			select {
+			case <-request.Context().Done():
+			case <-release:
+			}
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"jsonrpc":"2.0","id":4,"result":{}}`))
+	}))
+	defer remote.Close()
+	defer close(release)
+
+	proxy := testMCPProxy(remote.URL, "flare_pat_good")
+	proxy.timeout = 100 * time.Millisecond
+	replies, _ := runMCPProxy(t, proxy, toolsListMessage, `{"jsonrpc":"2.0","id":4,"method":"ping"}`)
+	if replies["2"]["error"].(map[string]any)["message"] != "Flare didn't answer within 100ms" {
+		t.Fatalf("reply = %v", replies["2"])
+	}
+	if replies["4"]["result"] == nil {
+		t.Fatalf("a stalled request shouldn't hold up the others: %v", replies["4"])
+	}
+}
+
+func readBody(request *http.Request) string {
+	body, _ := io.ReadAll(request.Body)
+	return string(body)
 }
 
 func TestMCPProxyDoesNotFollowRedirectsWithTheToken(t *testing.T) {

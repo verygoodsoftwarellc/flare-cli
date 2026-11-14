@@ -17,8 +17,14 @@ import (
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
 )
 
-// maxMCPMessage caps one message read from stdin or from Flare.
-const maxMCPMessage = 10 << 20
+const (
+	// maxMCPMessage caps one message read from stdin or from Flare.
+	maxMCPMessage = 10 << 20
+	// mcpRequestTimeout bounds one exchange with Flare, event stream
+	// included. Flare's tools answer in seconds; this only stops a stalled
+	// request from hanging the client, or the exit after stdin closes.
+	mcpRequestTimeout = 2 * time.Minute
+)
 
 func newMCPCommand(options *rootOptions) *cobra.Command {
 	command := &cobra.Command{
@@ -47,6 +53,7 @@ type mcpProxy struct {
 	httpClient *http.Client
 	authHint   string
 	scopeHint  string
+	timeout    time.Duration
 
 	mutex           sync.Mutex
 	sessionID       string
@@ -76,6 +83,7 @@ func newMCPProxy(client *api.Client) *mcpProxy {
 		httpClient: remoteHTTPClient(client.Token),
 		authHint:   client.AuthHint,
 		scopeHint:  client.ScopeHint,
+		timeout:    mcpRequestTimeout,
 	}
 }
 
@@ -123,11 +131,16 @@ func (proxy *mcpProxy) run(ctx context.Context, input io.Reader, output io.Write
 }
 
 func (proxy *mcpProxy) forward(ctx context.Context, message []byte, envelope rpcEnvelope) {
+	ctx, cancel := context.WithTimeout(ctx, proxy.timeout)
+	defer cancel()
 	answered, err := proxy.post(ctx, message, envelope)
 	if !envelope.isRequest() || answered {
 		return
 	}
-	if err == nil {
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		err = fmt.Errorf("Flare didn't answer within %s", proxy.timeout)
+	case err == nil:
 		err = errors.New("Flare ended the response without answering")
 	}
 	proxy.writeError(envelope.ID, err)
