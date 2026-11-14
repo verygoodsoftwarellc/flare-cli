@@ -16,7 +16,6 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
 )
 
 const testRemoteURL = "https://flare.example/mcp"
@@ -352,7 +351,7 @@ func TestRemoteSetupClientSelection(t *testing.T) {
 }
 
 func TestVerifyRemoteMCPSendsTheTokenAndListsTools(t *testing.T) {
-	server := newMCPServer(api.New("http://127.0.0.1:1", "unused"))
+	server := newFakeFlareMCPServer()
 	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
 	remote := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("Authorization") != "Bearer flare_pat_good" {
@@ -364,7 +363,7 @@ func TestVerifyRemoteMCPSendsTheTokenAndListsTools(t *testing.T) {
 	defer remote.Close()
 
 	count, err := verifyRemoteMCP(context.Background(), remote.URL, "flare_pat_good")
-	if err != nil || count != 11 {
+	if err != nil || count != fakeFlareTools {
 		t.Fatalf("count = %d, err = %v", count, err)
 	}
 	if _, err := verifyRemoteMCP(context.Background(), remote.URL, "flare_pat_bad"); err == nil {

@@ -456,13 +456,8 @@ func verifyRemoteMCP(ctx context.Context, endpoint, token string) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	transport := &mcp.StreamableClientTransport{
-		Endpoint: endpoint,
-		HTTPClient: &http.Client{
-			Transport: bearerTransport{token: token, base: http.DefaultTransport},
-			// bearerTransport adds the token to every request it sends, so a
-			// followed redirect would hand it to whatever host it points at.
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
+		Endpoint:             endpoint,
+		HTTPClient:           remoteHTTPClient(token),
 		MaxRetries:           -1,
 		DisableStandaloneSSE: true,
 	}
@@ -477,6 +472,16 @@ func verifyRemoteMCP(ctx context.Context, endpoint, token string) (int, error) {
 		return 0, err
 	}
 	return len(tools.Tools), nil
+}
+
+// remoteHTTPClient talks to Flare's hosted MCP server with the token. It
+// never follows a redirect: bearerTransport adds the token to every request
+// it sends, so a followed redirect would hand it to whatever host it points at.
+func remoteHTTPClient(token string) *http.Client {
+	return &http.Client{
+		Transport:     bearerTransport{token: token, base: http.DefaultTransport},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 }
 
 type bearerTransport struct {

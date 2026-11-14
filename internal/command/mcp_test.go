@@ -1,310 +1,298 @@
 package command
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
-	"github.com/verygoodsoftwarellc/flare-cli/internal/version"
 )
 
-func TestMCPInitializesListsAndCallsCuratedReadTools(t *testing.T) {
-	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/api/v1/organizations" {
-			t.Fatalf("unexpected path %s", request.URL.Path)
-		}
-		_, _ = writer.Write([]byte(`{"organizations":[{"id":1,"name":"Flare"}],"pagination":{"next":null,"previous":null}}`))
-	}))
-	defer apiServer.Close()
+// fakeFlareTools is how many tools newFakeFlareMCPServer offers.
+const fakeFlareTools = 2
 
-	session := connectMCPClient(t, newMCPServer(api.New(apiServer.URL, "flare_pat_test")))
-	initialized := session.InitializeResult()
-	if initialized.ServerInfo.Name != "flare" || initialized.ServerInfo.Version != version.Current() {
-		t.Fatalf("unexpected server info %#v", initialized.ServerInfo)
+// newFakeFlareMCPServer stands in for Flare's hosted MCP server.
+func newFakeFlareMCPServer() *mcp.Server {
+	server := mcp.NewServer(&mcp.Implementation{Name: "flare", Version: "test"}, nil)
+	type listInput struct {
+		Limit int `json:"limit,omitempty"`
 	}
-
-	listed, err := session.ListTools(context.Background(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(listed.Tools) != 11 {
-		t.Fatalf("expected 11 curated tools, got %d", len(listed.Tools))
-	}
-	for _, tool := range listed.Tools {
-		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
-			t.Fatalf("tool %s is not marked read-only", tool.Name)
-		}
-	}
-
-	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_organizations", Arguments: map[string]any{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.IsError {
-		t.Fatalf("unexpected tool error %#v", result.Content)
-	}
-	structured, ok := result.StructuredContent.(map[string]any)
-	if !ok || structured["organizations"] == nil {
-		t.Fatalf("unexpected result %#v", result.StructuredContent)
-	}
+	mcp.AddTool(server, &mcp.Tool{Name: "list_organizations", Description: "List organizations."},
+		func(_ context.Context, _ *mcp.CallToolRequest, input listInput) (*mcp.CallToolResult, map[string]any, error) {
+			return nil, map[string]any{"organizations": []map[string]any{{"id": 1, "name": "Flare"}}, "limit": input.Limit}, nil
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "list_projects", Description: "List projects."},
+		func(context.Context, *mcp.CallToolRequest, listInput) (*mcp.CallToolResult, map[string]any, error) {
+			return nil, map[string]any{"projects": []any{}}, nil
+		})
+	return server
 }
 
-func TestMCPToolsCallOnlyExpectedReadEndpoints(t *testing.T) {
-	type expectedRequest struct {
-		path     string
-		query    string
-		response string
-	}
-	expected := []expectedRequest{
-		{path: "/api/v1/organizations", query: "cursor=next-org&limit=10", response: `{"organizations":[],"pagination":{"next":null,"previous":null}}`},
-		{path: "/api/v1/projects", query: "limit=100&organization_id=4", response: `{"projects":[],"pagination":{"next":null,"previous":null}}`},
-		{path: "/api/v1/environments", query: "limit=100&project_id=9", response: `{"environments":[],"pagination":{"next":null,"previous":null}}`},
-		{path: "/api/v1/overviews", query: "environment_ids=18%2C19&hours=24&limit=5&sort=sum", response: `{"overviews":[]}`},
-		{path: "/api/v1/namespaces", query: "direction=desc&environment_id=18&hours=24&limit=25&namespace=web&sort=sum", response: `{"environment":{"id":18,"project_id":9,"name":"Production"},"namespace":"web","operations":[],"pagination":{"next":null,"previous":null}}`},
-		{path: "/api/v1/namespaces/overview", query: "environment_id=18&hours=1&limit=10&namespace=job", response: `{"environment":{"id":18,"project_id":9,"name":"Production"},"namespace":"job","hours":1,"bucket":"minute","as_of":"2026-10-07T20:31:50Z","window_start":"2026-10-07T19:31:00Z","window_end":"2026-10-07T20:31:50Z","buckets":[],"data_through":null,"stats":{"count":0,"sum":0,"avg":0,"error_count":0,"error_rate":0,"impact":0},"series":{"count":[],"sum":[],"error_count":[]},"top_by_sum":[],"top_by_count":[]}`},
-		{path: "/api/v1/metrics/query", query: "direction=desc&environment_id=18&group_by=operation&hours=24&limit=10&min_count=5&namespace=web&series=true&sort=count&target=UsersController%23index", response: `{"environment":{"id":18,"project_id":9,"name":"Production"},"hours":24,"bucket":"hour","as_of":"2026-10-07T20:31:50Z","window_start":"2026-10-06T20:00:00Z","window_end":"2026-10-07T20:31:50Z","buckets":[],"filter":{"namespace":"web","target":"UsersController#index"},"group_by":["operation"],"sort":"count","direction":"desc","limit":10,"min_count":5,"data_through":null,"total":{"count":0,"sum":0,"avg":0,"error_count":0,"error_rate":0},"groups":[]}`},
-		{path: "/api/v1/series", query: "environment_id=18&hours=24&namespace=job&target=EventJob", response: `{"environment":{"id":18,"project_id":9,"name":"Production"},"namespace":"job","selector":{"target":"EventJob"},"hours":24,"bucket":"hour","as_of":"2026-10-07T20:31:50Z","window_start":"2026-10-06T20:00:00Z","window_end":"2026-10-07T20:31:50Z","buckets":[],"data_through":null,"stats":{"count":0,"sum":0,"avg":0,"error_count":0,"error_rate":0},"series":{"count":[],"sum":[],"error_count":[]}}`},
-		{path: "/api/v1/changes", query: "environment_id=18&hours=6", response: `{"environment":{"id":18,"project_id":9,"name":"Production"},"hours":6,"bucket":"minute","as_of":"2026-11-12T15:30:20Z","window_start":"2026-11-12T09:30:00Z","window_end":"2026-11-12T15:30:20Z","changes":[]}`},
-		{path: "/api/v1/traces", query: "cursor=older&environment_id=18&limit=10&namespace=web&target=UsersController%23show", response: `{"environment":{"id":18,"project_id":9,"name":"Production"},"traces":[],"pagination":{"next":null}}`},
-		{path: "/api/v1/traces/77", query: "", response: `{"trace":{"id":77,"environment_id":18,"root_name":"UsersController#show","started_at":"2026-11-12T15:00:00.000Z","duration_ms":50,"span_count":2,"rule":null},"available":false,"message":"not yet","spans":[]}`},
-	}
-	requestIndex := 0
-	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if requestIndex >= len(expected) {
-			t.Fatalf("unexpected extra request %s", request.URL.String())
-		}
-		want := expected[requestIndex]
-		requestIndex++
-		if request.Method != http.MethodGet || request.URL.Path != want.path || request.URL.RawQuery != want.query {
-			t.Fatalf("unexpected request %s %s, want GET %s?%s", request.Method, request.URL.String(), want.path, want.query)
-		}
-		_, _ = writer.Write([]byte(want.response))
-	}))
-	defer apiServer.Close()
-	session := connectMCPClient(t, newMCPServer(api.New(apiServer.URL, "flare_pat_test")))
+type recordedMCPRequest struct {
+	httpMethod      string
+	rpcMethod       string
+	sessionID       string
+	protocolVersion string
+}
 
-	calls := []*mcp.CallToolParams{
-		{Name: "list_organizations", Arguments: map[string]any{"cursor": "next-org", "limit": 10}},
-		{Name: "list_projects", Arguments: map[string]any{"organization_id": 4}},
-		{Name: "list_environments", Arguments: map[string]any{"project_id": 9}},
-		{Name: "get_environment_overviews", Arguments: map[string]any{"environment_ids": []int{18, 19}}},
-		{Name: "list_namespace_operations", Arguments: map[string]any{"environment_id": 18, "namespace": "web"}},
-		{Name: "get_namespace_overview", Arguments: map[string]any{"environment_id": 18, "namespace": "job", "hours": 1}},
-		{Name: "query_metrics", Arguments: map[string]any{"environment_id": 18, "namespace": "web", "target": "UsersController#index", "group_by": []string{"operation"}, "sort": "count", "min_count": 5, "series": true}},
-		{Name: "get_operation_series", Arguments: map[string]any{"environment_id": 18, "namespace": "job", "target": "EventJob"}},
-		{Name: "list_changes", Arguments: map[string]any{"environment_id": 18, "hours": 6}},
-		{Name: "list_traces", Arguments: map[string]any{"environment_id": 18, "namespace": "web", "target": "UsersController#show", "limit": 10, "cursor": "older"}},
-		{Name: "get_trace", Arguments: map[string]any{"id": 77}},
+// fakeFlare serves newFakeFlareMCPServer at /mcp behind a bearer check, the
+// way Flare does, and records each request.
+type fakeFlare struct {
+	*httptest.Server
+	mutex    sync.Mutex
+	requests []recordedMCPRequest
+}
+
+func newFakeFlare(t *testing.T, jsonResponse bool) *fakeFlare {
+	t.Helper()
+	server := newFakeFlareMCPServer()
+	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{JSONResponse: jsonResponse})
+	fake := &fakeFlare{}
+	fake.Server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/mcp" {
+			http.NotFound(writer, request)
+			return
+		}
+		if request.Header.Get("Authorization") != "Bearer flare_pat_good" {
+			writer.Header().Set("Content-Type", "application/problem+json")
+			writer.WriteHeader(http.StatusUnauthorized)
+			_, _ = writer.Write([]byte(`{"detail":"A valid personal access token is required.","request_id":"req-1"}`))
+			return
+		}
+		body, _ := io.ReadAll(request.Body)
+		request.Body = io.NopCloser(bytes.NewReader(body))
+		var envelope rpcEnvelope
+		_ = json.Unmarshal(body, &envelope)
+		fake.mutex.Lock()
+		fake.requests = append(fake.requests, recordedMCPRequest{
+			httpMethod:      request.Method,
+			rpcMethod:       envelope.Method,
+			sessionID:       request.Header.Get("Mcp-Session-Id"),
+			protocolVersion: request.Header.Get("Mcp-Protocol-Version"),
+		})
+		fake.mutex.Unlock()
+		handler.ServeHTTP(writer, request)
+	}))
+	t.Cleanup(fake.Close)
+	return fake
+}
+
+func testMCPProxy(baseURL, token string) *mcpProxy {
+	client := api.New(baseURL, token)
+	client.AuthHint = "Run `flare-cli auth login` to sign in again."
+	client.ScopeHint = "Run `flare-cli auth login` to get a token with every scope."
+	return newMCPProxy(client)
+}
+
+// runMCPProxy feeds input to the proxy as a client that doesn't wait for
+// answers would, and returns what it wrote keyed by JSON-RPC id.
+func runMCPProxy(t *testing.T, proxy *mcpProxy, input ...string) (map[string]map[string]any, string) {
+	t.Helper()
+	var output bytes.Buffer
+	if err := proxy.run(context.Background(), strings.NewReader(strings.Join(input, "\n")+"\n"), &output); err != nil {
+		t.Fatal(err)
 	}
-	for _, call := range calls {
-		result, err := session.CallTool(context.Background(), call)
-		if err != nil || result.IsError {
-			text := ""
-			if result != nil && len(result.Content) > 0 {
-				if content, ok := result.Content[0].(*mcp.TextContent); ok {
-					text = content.Text
+	replies := map[string]map[string]any{}
+	for _, line := range strings.Split(strings.TrimSpace(output.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var reply map[string]any
+		if err := json.Unmarshal([]byte(line), &reply); err != nil {
+			t.Fatalf("output line isn't one JSON message: %q", line)
+		}
+		id, _ := json.Marshal(reply["id"])
+		replies[string(id)] = reply
+	}
+	return replies, output.String()
+}
+
+const (
+	initializeMessage  = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`
+	initializedMessage = `{"jsonrpc":"2.0","method":"notifications/initialized"}`
+	toolsListMessage   = `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`
+	toolsCallMessage   = `{"jsonrpc":"2.0","id":"call-3","method":"tools/call","params":{"name":"list_organizations","arguments":{"limit":7}}}`
+)
+
+func TestMCPProxyRelaysASessionToFlare(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		jsonResponse bool
+	}{{"event stream replies", false}, {"JSON replies", true}} {
+		t.Run(test.name, func(t *testing.T) {
+			fake := newFakeFlare(t, test.jsonResponse)
+			replies, _ := runMCPProxy(t, testMCPProxy(fake.URL, "flare_pat_good"),
+				initializeMessage, initializedMessage, toolsListMessage, toolsCallMessage)
+
+			if len(replies) != 3 {
+				t.Fatalf("want answers to initialize, tools/list and tools/call only, got %v", replies)
+			}
+			initialized := replies["1"]["result"].(map[string]any)
+			if initialized["serverInfo"].(map[string]any)["name"] != "flare" {
+				t.Fatalf("initialize = %v", replies["1"])
+			}
+			tools := replies["2"]["result"].(map[string]any)["tools"].([]any)
+			if len(tools) != fakeFlareTools {
+				t.Fatalf("tools/list = %v", replies["2"])
+			}
+			called := replies[`"call-3"`]["result"].(map[string]any)["structuredContent"].(map[string]any)
+			if called["limit"] != float64(7) || called["organizations"] == nil {
+				t.Fatalf("tools/call = %v", replies[`"call-3"`])
+			}
+
+			fake.mutex.Lock()
+			defer fake.mutex.Unlock()
+			if len(fake.requests) != 5 || fake.requests[4].httpMethod != http.MethodDelete {
+				t.Fatalf("want 4 POSTs and a closing DELETE, got %+v", fake.requests)
+			}
+			sessionID := fake.requests[1].sessionID
+			for _, request := range fake.requests[1:] {
+				if request.sessionID == "" || request.sessionID != sessionID {
+					t.Fatalf("every request after initialize should carry its session: %+v", fake.requests)
+				}
+				if request.httpMethod == http.MethodPost && request.protocolVersion != initialized["protocolVersion"] {
+					t.Fatalf("want protocol version %v on %+v", initialized["protocolVersion"], request)
 				}
 			}
-			t.Fatalf("call %s failed: %s err=%v", call.Name, text, err)
-		}
-	}
-	if requestIndex != len(expected) {
-		t.Fatalf("got %d API requests, want %d", requestIndex, len(expected))
-	}
-}
-
-func TestMCPNamespaceOperationsFollowsNextCursor(t *testing.T) {
-	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if got := request.URL.Query().Get("cursor"); got != "page-2" {
-			t.Errorf("cursor = %q, want page-2", got)
-		}
-		_, _ = writer.Write([]byte(`{"environment":{"id":18,"project_id":9,"name":"Production"},"namespace":"web","operations":[],"pagination":{"next":null,"previous":null}}`))
-	}))
-	defer apiServer.Close()
-	session := connectMCPClient(t, newMCPServer(api.New(apiServer.URL, "flare_pat_test")))
-
-	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name:      "list_namespace_operations",
-		Arguments: map[string]any{"environment_id": 18, "namespace": "web", "cursor": "page-2"},
-	})
-	if err != nil || result.IsError {
-		t.Fatalf("result=%#v err=%v", result, err)
-	}
-}
-
-func TestMCPRejectsInvalidArgumentsAndUnknownTools(t *testing.T) {
-	session := connectMCPClient(t, newMCPServer(api.New("http://127.0.0.1:1", "flare_pat_test")))
-	tests := []struct {
-		name      string
-		tool      string
-		arguments map[string]any
-	}{
-		{name: "fractional ID", tool: "list_namespace_operations", arguments: map[string]any{"environment_id": 12.9, "namespace": "web"}},
-		{name: "unknown argument", tool: "list_namespace_operations", arguments: map[string]any{"environment_id": 12, "namespace": "web", "unexpected": true}},
-		{name: "zero organization", tool: "list_projects", arguments: map[string]any{"organization_id": 0}},
-		{name: "duplicate environments", tool: "get_environment_overviews", arguments: map[string]any{"environment_ids": []int{1, 1}}},
-		{name: "unsupported hours", tool: "get_operation_series", arguments: map[string]any{"environment_id": 11, "namespace": "job", "hours": 2}},
-		{name: "unknown namespace", tool: "get_operation_series", arguments: map[string]any{"environment_id": 11, "namespace": "nope"}},
-		{name: "overview limit above series maximum", tool: "get_namespace_overview", arguments: map[string]any{"environment_id": 11, "namespace": "job", "limit": 26}},
-		{name: "unknown group_by", tool: "query_metrics", arguments: map[string]any{"environment_id": 11, "group_by": []string{"color"}}},
-		{name: "series limit above maximum", tool: "query_metrics", arguments: map[string]any{"environment_id": 11, "series": true, "limit": 26}},
-		{name: "impact is not a query sort", tool: "query_metrics", arguments: map[string]any{"environment_id": 11, "sort": "impact"}},
-		{name: "repeated group_by", tool: "query_metrics", arguments: map[string]any{"environment_id": 11, "group_by": []string{"target", "target"}}},
-		{name: "changes without environment", tool: "list_changes", arguments: map[string]any{}},
-		{name: "changes with unsupported hours", tool: "list_changes", arguments: map[string]any{"environment_id": 11, "hours": 3}},
-		{name: "traces target without namespace", tool: "list_traces", arguments: map[string]any{"environment_id": 11, "target": "UsersController#show"}},
-		{name: "traces namespace without target", tool: "list_traces", arguments: map[string]any{"environment_id": 11, "namespace": "web"}},
-		{name: "traces for an untraced namespace", tool: "list_traces", arguments: map[string]any{"environment_id": 11, "namespace": "db", "target": "users"}},
-		{name: "traces limit above maximum", tool: "list_traces", arguments: map[string]any{"environment_id": 11, "limit": 101}},
-		{name: "zero trace id", tool: "get_trace", arguments: map[string]any{"id": 0}},
-		{name: "unknown tool", tool: "missing_tool", arguments: map[string]any{}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: test.tool, Arguments: test.arguments})
-			if err == nil && (result == nil || !result.IsError) {
-				t.Fatalf("expected rejection, got result=%#v err=%v", result, err)
+			if fake.requests[1].rpcMethod != "notifications/initialized" {
+				t.Fatalf("notifications/initialized should reach Flare before later requests: %+v", fake.requests)
 			}
 		})
 	}
 }
 
-func TestMCPQueryLengthCountsUnicodeCharacters(t *testing.T) {
-	requests := make(chan *http.Request, 1)
-	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		requests <- request
-		_, _ = writer.Write([]byte(`{"environment":{"id":1,"project_id":1,"name":"Production"},"namespace":"web","operations":[],"pagination":{"next":null,"previous":null}}`))
+func TestMCPProxyWritesNothingForANotification(t *testing.T) {
+	var posts atomic.Int32
+	remote := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		posts.Add(1)
+		writer.WriteHeader(http.StatusAccepted)
 	}))
-	defer apiServer.Close()
-	session := connectMCPClient(t, newMCPServer(api.New(apiServer.URL, "flare_pat_test")))
+	defer remote.Close()
 
-	query := strings.Repeat("🔥", 200)
-	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "list_namespace_operations",
-		Arguments: map[string]any{
-			"environment_id": 1,
-			"namespace":      "web",
-			"q":              query,
-		},
-	})
-	if err != nil || result.IsError {
-		t.Fatalf("expected 200 Unicode characters to be accepted, result=%#v err=%v", result, err)
-	}
-	request := <-requests
-	if request.URL.Query().Get("q") != query {
-		t.Fatal("Unicode query was not forwarded intact")
-	}
-
-	result, err = session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "list_namespace_operations",
-		Arguments: map[string]any{
-			"environment_id": 1,
-			"namespace":      "web",
-			"q":              strings.Repeat("🔥", 256),
-		},
-	})
-	if err == nil && (result == nil || !result.IsError) {
-		t.Fatalf("expected 256 Unicode characters to be rejected, result=%#v err=%v", result, err)
+	_, output := runMCPProxy(t, testMCPProxy(remote.URL, "flare_pat_good"), `{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":9}}`)
+	if output != "" || posts.Load() != 1 {
+		t.Fatalf("output = %q after %d posts", output, posts.Load())
 	}
 }
 
-func TestMCPCancellationReachesFlareRequest(t *testing.T) {
-	started := make(chan struct{})
-	cancelled := make(chan struct{})
-	apiServer := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
-		close(started)
-		<-request.Context().Done()
-		close(cancelled)
+func TestMCPProxyCompactsMultilineEventData(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, ": keepalive\n\nevent: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progress\":1}}\n\n"+
+			"data: {\"jsonrpc\":\"2.0\",\r\ndata:  \"id\":5,\"result\":{}}\r\n\r\n")
 	}))
-	defer apiServer.Close()
-	session := connectMCPClient(t, newMCPServer(api.New(apiServer.URL, "flare_pat_test")))
+	defer remote.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_, _ = session.CallTool(ctx, &mcp.CallToolParams{Name: "list_organizations", Arguments: map[string]any{}})
-	}()
-	select {
-	case <-started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Flare request did not start")
+	replies, output := runMCPProxy(t, testMCPProxy(remote.URL, "flare_pat_good"), `{"jsonrpc":"2.0","id":5,"method":"ping"}`)
+	if strings.Count(output, "\n") != 2 || replies["5"]["result"] == nil || replies["null"]["method"] != "notifications/progress" {
+		t.Fatalf("output = %q", output)
 	}
-	cancel()
-	select {
-	case <-cancelled:
-	case <-time.After(2 * time.Second):
-		t.Fatal("MCP cancellation did not reach Flare request")
-	}
-	<-done
 }
 
-func TestMCPPassesChangesAndSpansThrough(t *testing.T) {
-	change := `{"id":5,"kind":"deploy","title":"Deployed 2222222","revision":"2222222bbbb","previous_revision":"1111111aaaa","rollback":false,"occurred_at":"2026-11-12T15:10:20Z","finished_at":null,"rollout_seconds":null,"bucket":"2026-11-12T15:00:00Z"}`
-	responses := map[string]string{
-		"/api/v1/series":    `{"environment":{"id":18,"project_id":9,"name":"Production"},"namespace":"web","selector":{},"hours":24,"bucket":"hour","buckets":[],"data_through":null,"stats":{"count":0,"sum":0,"avg":0,"error_count":0,"error_rate":0},"series":{"count":[],"sum":[],"error_count":[]},"changes":[` + change + `]}`,
-		"/api/v1/overviews": `{"overviews":[{"environment":{"id":18,"project_id":9,"name":"Production"},"hours":24,"changes":[` + change + `],"data_through":null,"namespaces":[]}]}`,
-		"/api/v1/traces/7":  `{"trace":{"id":7,"environment_id":18,"root_name":"UsersController#show","started_at":"2026-11-12T15:00:00.000Z","duration_ms":50,"span_count":2,"rule":"UsersController#show"},"available":true,"collapsed":true,"truncated":false,"spans":[{"id":"a","depth":0,"name":"process_action.action_controller","label":"UsersController#show","kind":"controller","offset_ms":0,"duration_ms":50},{"id":"b","parent_id":"a","depth":1,"name":"sql.active_record","label":"User Load","kind":"sql","offset_ms":10.5,"duration_ms":40,"source":"app/models/user.rb:3","count":12}]}`,
-	}
-	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		_, _ = writer.Write([]byte(responses[request.URL.Path]))
-	}))
-	defer apiServer.Close()
-	session := connectMCPClient(t, newMCPServer(api.New(apiServer.URL, "flare_pat_test")))
+func TestMCPProxyAnswersARejectedTokenWithTheSignInHint(t *testing.T) {
+	fake := newFakeFlare(t, false)
+	replies, output := runMCPProxy(t, testMCPProxy(fake.URL, "flare_pat_expired"), initializeMessage, initializedMessage)
 
-	call := func(name string, arguments map[string]any) map[string]any {
-		t.Helper()
-		result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: arguments})
-		if err != nil || result.IsError {
-			t.Fatalf("call %s: result=%#v err=%v", name, result, err)
+	if strings.Count(output, "\n") != 1 {
+		t.Fatalf("only the request should get an answer, got %q", output)
+	}
+	rpcError, _ := replies["1"]["error"].(map[string]any)
+	if rpcError["message"] != "A valid personal access token is required. Run `flare-cli auth login` to sign in again. (request req-1)" {
+		t.Fatalf("error = %v", replies["1"])
+	}
+}
+
+func TestMCPProxyAnswersAMissingScopeWithTheScopeHint(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusForbidden)
+		_, _ = writer.Write([]byte(`{"detail":"This token requires the mcp scope."}`))
+	}))
+	defer remote.Close()
+
+	replies, _ := runMCPProxy(t, testMCPProxy(remote.URL, "flare_pat_old"), toolsListMessage)
+	rpcError, _ := replies["2"]["error"].(map[string]any)
+	if !strings.HasSuffix(rpcError["message"].(string), "Run `flare-cli auth login` to get a token with every scope.") {
+		t.Fatalf("error = %v", replies["2"])
+	}
+}
+
+func TestMCPProxyPassesJSONRPCErrorsThrough(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"Unknown tool"}}`))
+	}))
+	defer remote.Close()
+
+	replies, _ := runMCPProxy(t, testMCPProxy(remote.URL, "flare_pat_good"), toolsListMessage)
+	if replies["2"]["error"].(map[string]any)["message"] != "Unknown tool" {
+		t.Fatalf("reply = %v", replies["2"])
+	}
+}
+
+func TestMCPProxyAnswersARequestFlareDroppedOrCouldNotReach(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+	}))
+	defer remote.Close()
+
+	replies, _ := runMCPProxy(t, testMCPProxy(remote.URL, "flare_pat_good"), toolsListMessage)
+	if replies["2"]["error"].(map[string]any)["message"] != "Flare ended the response without answering" {
+		t.Fatalf("reply = %v", replies["2"])
+	}
+
+	remote.Close()
+	replies, _ = runMCPProxy(t, testMCPProxy(remote.URL, "flare_pat_good"), toolsListMessage)
+	if message, _ := replies["2"]["error"].(map[string]any)["message"].(string); !strings.HasPrefix(message, "request Flare:") {
+		t.Fatalf("reply = %v", replies["2"])
+	}
+}
+
+func TestMCPProxyDoesNotFollowRedirectsWithTheToken(t *testing.T) {
+	var leaked atomic.Bool
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "" {
+			leaked.Store(true)
 		}
-		return result.StructuredContent.(map[string]any)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}`))
+	}))
+	defer elsewhere.Close()
+	remote := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.Redirect(writer, request, elsewhere.URL+"/mcp", http.StatusTemporaryRedirect)
+	}))
+	defer remote.Close()
+
+	replies, _ := runMCPProxy(t, testMCPProxy(remote.URL, "flare_pat_good"), toolsListMessage)
+	if leaked.Load() {
+		t.Fatal("the token followed the redirect to another host")
 	}
-	revision := func(changes any) any {
-		return changes.([]any)[0].(map[string]any)["revision"]
-	}
-	if got := revision(call("get_operation_series", map[string]any{"environment_id": 18, "namespace": "web"})["changes"]); got != "2222222bbbb" {
-		t.Fatalf("series change revision = %v", got)
-	}
-	overview := call("get_environment_overviews", map[string]any{"environment_ids": []int{18}})["overviews"].([]any)[0].(map[string]any)
-	if got := revision(overview["changes"]); got != "2222222bbbb" {
-		t.Fatalf("overview change revision = %v", got)
-	}
-	spans := call("get_trace", map[string]any{"id": 7})["spans"].([]any)
-	collapsed := spans[1].(map[string]any)
-	if collapsed["count"] != float64(12) || collapsed["parent_id"] != "a" || collapsed["offset_ms"] != 10.5 || collapsed["source"] != "app/models/user.rb:3" {
-		t.Fatalf("collapsed span = %#v", collapsed)
-	}
-	if _, present := spans[0].(map[string]any)["parent_id"]; present {
-		t.Fatalf("root span should have no parent_id: %#v", spans[0])
+	message, _ := replies["2"]["error"].(map[string]any)["message"].(string)
+	if !strings.Contains(message, "not following it with your token") {
+		t.Fatalf("reply = %v", replies["2"])
 	}
 }
 
-func connectMCPClient(t *testing.T, server *mcp.Server) *mcp.ClientSession {
-	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	clientTransport, serverTransport := mcp.NewInMemoryTransports()
-	serverSession, err := server.Connect(ctx, serverTransport, nil)
-	if err != nil {
-		cancel()
+func TestMCPCommandUsesTheCLIToken(t *testing.T) {
+	fake := newFakeFlare(t, true)
+	t.Setenv("FLARE_TOKEN", "flare_pat_good")
+	var output bytes.Buffer
+	options := &rootOptions{name: "flare-cli", apiURL: fake.URL, output: &output, errors: io.Discard,
+		input: strings.NewReader(initializeMessage + "\n" + toolsListMessage + "\n")}
+	command := newMCPCommand(options)
+	command.SetArgs([]string{})
+	if err := command.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	client := mcp.NewClient(&mcp.Implementation{Name: "flare-cli-test", Version: "dev"}, nil)
-	clientSession, err := client.Connect(ctx, clientTransport, nil)
-	if err != nil {
-		_ = serverSession.Close()
-		cancel()
-		t.Fatal(err)
+	if !strings.Contains(output.String(), `"list_projects"`) {
+		t.Fatalf("output = %q", output.String())
 	}
-	t.Cleanup(func() {
-		_ = clientSession.Close()
-		_ = serverSession.Close()
-		cancel()
-	})
-	return clientSession
 }

@@ -15,12 +15,21 @@ import (
 	"github.com/verygoodsoftwarellc/flare-cli/internal/command"
 )
 
+// TestMCPCommandEndToEnd runs a real MCP client against the binary's stdio
+// proxy, in front of a stand-in for Flare's hosted MCP server.
 func TestMCPCommandEndToEnd(t *testing.T) {
+	flare := mcp.NewServer(&mcp.Implementation{Name: "flare", Version: "test"}, nil)
+	mcp.AddTool(flare, &mcp.Tool{Name: "list_organizations", Description: "List organizations."},
+		func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, map[string]any, error) {
+			return nil, map[string]any{"organizations": []map[string]any{{"id": 1, "name": "Flare"}}}, nil
+		})
+	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return flare }, nil)
 	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/api/v1/organizations" {
-			t.Fatalf("unexpected path %s", request.URL.Path)
+		if request.URL.Path != "/mcp" || request.Header.Get("Authorization") != "Bearer flare_pat_test" {
+			http.Error(writer, "unexpected request", http.StatusNotFound)
+			return
 		}
-		_, _ = writer.Write([]byte(`{"organizations":[{"id":1,"name":"Flare"}],"pagination":{"next":null,"previous":null}}`))
+		handler.ServeHTTP(writer, request)
 	}))
 	defer apiServer.Close()
 	t.Setenv("HOME", t.TempDir())
@@ -45,8 +54,8 @@ func TestMCPCommandEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v\nstderr: %s", err, stderr.String())
 	}
-	if len(tools.Tools) != 11 {
-		t.Fatalf("expected 11 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 1 || tools.Tools[0].Name != "list_organizations" {
+		t.Fatalf("expected Flare's one tool, got %#v", tools.Tools)
 	}
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "list_organizations", Arguments: map[string]any{}})
 	if err != nil || result.IsError {

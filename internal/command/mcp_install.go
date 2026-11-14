@@ -101,8 +101,8 @@ func newMCPInstallCommand(options *rootOptions) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "install",
 		Short: "Configure Flare in installed MCP clients",
-		Long: "Configure installed MCP clients to run this CLI's local Flare MCP server.\n\n" +
-			"With --remote, point them at Flare's hosted MCP server instead, the way `setup` does.",
+		Long: "Configure installed MCP clients to run `mcp`, this CLI's stdio bridge to Flare's hosted MCP server.\n\n" +
+			"With --remote, point them at the hosted server directly instead, the way `setup` does.",
 		Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			if remote {

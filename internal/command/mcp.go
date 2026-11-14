@@ -1,535 +1,313 @@
 package command
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
-	"slices"
-	"strconv"
-	"strings"
-	"unicode/utf8"
+	"io"
+	"mime"
+	"net/http"
+	"sync"
+	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
-	"github.com/verygoodsoftwarellc/flare-cli/internal/version"
 )
 
-type listOrganizationsInput struct {
-	Cursor string `json:"cursor,omitempty"`
-	Limit  int    `json:"limit,omitempty"`
-}
-
-type listProjectsInput struct {
-	Cursor         string `json:"cursor,omitempty"`
-	Limit          int    `json:"limit,omitempty"`
-	OrganizationID *int64 `json:"organization_id,omitempty"`
-}
-
-type listEnvironmentsInput struct {
-	Cursor    string `json:"cursor,omitempty"`
-	Limit     int    `json:"limit,omitempty"`
-	ProjectID *int64 `json:"project_id,omitempty"`
-}
-
-type overviewInput struct {
-	EnvironmentIDs []int64 `json:"environment_ids"`
-	Hours          int     `json:"hours,omitempty"`
-	Sort           string  `json:"sort,omitempty"`
-	Limit          int     `json:"limit,omitempty"`
-}
-
-type namespaceInput struct {
-	EnvironmentID int64  `json:"environment_id"`
-	Namespace     string `json:"namespace"`
-	Hours         int    `json:"hours,omitempty"`
-	Sort          string `json:"sort,omitempty"`
-	Direction     string `json:"direction,omitempty"`
-	Limit         int    `json:"limit,omitempty"`
-	Query         string `json:"q,omitempty"`
-	Cursor        string `json:"cursor,omitempty"`
-}
-
-// The series-shaped tools decode into the same scope / selector structs the
-// CLI binds its flags to, so both sides validate and encode identically.
-type namespaceOverviewInput struct {
-	scope
-	Limit int `json:"limit,omitempty"`
-}
-
-type seriesInput struct {
-	scope
-	selector
-}
-
-type tracesInput struct {
-	EnvironmentID int64  `json:"environment_id"`
-	Namespace     string `json:"namespace,omitempty"`
-	Target        string `json:"target,omitempty"`
-	Cursor        string `json:"cursor,omitempty"`
-	Limit         int    `json:"limit,omitempty"`
-}
-
-type traceInput struct {
-	ID int64 `json:"id"`
-}
-
-// traceableNamespaces are the namespaces Flare captures traces for.
-var traceableNamespaces = []string{"web", "job"}
-
-// maxTraceSpans is where get_trace starts collapsing repeated spans.
-const maxTraceSpans = 500
-
-const changesHelp = "changes lists the window's deploys, newest first, each with its revision and the bucket it began in (see list_changes)."
-
-type queryInput struct {
-	scope
-	selector
-	GroupBy   []string `json:"group_by,omitempty"`
-	Sort      string   `json:"sort,omitempty"`
-	Direction string   `json:"direction,omitempty"`
-	Limit     int      `json:"limit,omitempty"`
-	Series    bool     `json:"series,omitempty"`
-	MinCount  int      `json:"min_count,omitempty"`
-}
+// maxMCPMessage caps one message read from stdin or from Flare.
+const maxMCPMessage = 10 << 20
 
 func newMCPCommand(options *rootOptions) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "mcp",
-		Short: "Run a read-only MCP server over stdio",
-		Args:  cobra.NoArgs,
+		Short: "Connect a stdio MCP client to Flare's hosted MCP server",
+		Long: "Read MCP messages on stdin, forward each one to Flare's hosted MCP server (<api url>/mcp) with your " +
+			"Flare token, and write its replies on stdout, for MCP clients that only run local servers.",
+		Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			client, err := options.client()
 			if err != nil {
 				return err
 			}
-			return newMCPServer(client).Run(command.Context(), &mcp.StdioTransport{})
+			return newMCPProxy(client).run(command.Context(), options.input, options.output)
 		},
 	}
 	command.AddCommand(newMCPInstallCommand(options), newMCPConfigCommand(options))
 	return command
 }
 
-func newMCPServer(client *api.Client) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "flare", Version: version.Current()}, nil)
-	annotations := readOnlyToolAnnotations()
-	positiveInteger := map[string]any{"type": "integer", "minimum": 1}
-	hours := map[string]any{"type": "integer", "enum": allowedHours, "default": 24}
-	namespace := map[string]any{"type": "string", "enum": namespaces}
-	sort := map[string]any{"type": "string", "enum": sorts, "default": "sum"}
-	pagination := map[string]any{
-		"cursor": map[string]any{"type": "string"},
-		"limit":  map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "default": 100},
+// mcpProxy relays newline-delimited JSON-RPC between stdio and Flare's
+// Streamable HTTP MCP endpoint. It doesn't open the optional GET stream for
+// server-initiated messages; Flare's tools answer each request in its reply.
+type mcpProxy struct {
+	endpoint   string
+	httpClient *http.Client
+	authHint   string
+	scopeHint  string
+
+	mutex           sync.Mutex
+	sessionID       string
+	protocolVersion string
+
+	writeMutex sync.Mutex
+	output     io.Writer
+}
+
+type rpcEnvelope struct {
+	ID     json.RawMessage `json:"id"`
+	Method string          `json:"method"`
+	Result *struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	} `json:"result"`
+}
+
+// isRequest is true for a message that expects an answer, as opposed to a
+// notification or a response to a request from the server.
+func (envelope rpcEnvelope) isRequest() bool {
+	return envelope.Method != "" && len(envelope.ID) > 0 && string(envelope.ID) != "null"
+}
+
+func newMCPProxy(client *api.Client) *mcpProxy {
+	return &mcpProxy{
+		endpoint:   client.BaseURL + "/mcp",
+		httpClient: remoteHTTPClient(client.Token),
+		authHint:   client.AuthHint,
+		scopeHint:  client.ScopeHint,
 	}
+}
 
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "list_organizations",
-		Description: "List Flare organizations the user can access.",
-		InputSchema: objectSchema(pagination, nil),
-		Annotations: annotations,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input listOrganizationsInput) (*mcp.CallToolResult, api.OrganizationsResponse, error) {
-		query, err := catalogQuery(input.Cursor, input.Limit)
-		if err != nil {
-			return nil, api.OrganizationsResponse{}, err
+func (proxy *mcpProxy) run(ctx context.Context, input io.Reader, output io.Writer) error {
+	proxy.output = output
+	reader := bufio.NewReaderSize(input, 64<<10)
+	var pending sync.WaitGroup
+	defer func() {
+		pending.Wait()
+		proxy.endSession()
+	}()
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if len(line) > maxMCPMessage {
+			return fmt.Errorf("MCP message over %d bytes", maxMCPMessage)
 		}
-		var response api.OrganizationsResponse
-		err = client.Get(ctx, "/api/v1/organizations", query, &response)
-		return nil, response, err
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "list_projects",
-		Description: "List accessible Flare projects, optionally filtered by organization ID.",
-		InputSchema: objectSchema(mergeProperties(pagination, map[string]any{"organization_id": positiveInteger}), nil),
-		Annotations: annotations,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input listProjectsInput) (*mcp.CallToolResult, api.ProjectsResponse, error) {
-		query, err := catalogQuery(input.Cursor, input.Limit)
-		if err != nil {
-			return nil, api.ProjectsResponse{}, err
-		}
-		if input.OrganizationID != nil {
-			if *input.OrganizationID <= 0 {
-				return nil, api.ProjectsResponse{}, fmt.Errorf("organization_id must be positive")
+		if message := bytes.TrimSpace(line); len(message) > 0 {
+			var envelope rpcEnvelope
+			// A message that doesn't parse goes to Flare anyway, which
+			// answers it with a JSON-RPC parse error.
+			_ = json.Unmarshal(message, &envelope)
+			if envelope.isRequest() && envelope.Method != "initialize" {
+				// Requests run side by side, so a slow tool call doesn't
+				// hold up the others or a notification cancelling it.
+				pending.Add(1)
+				go func() {
+					defer pending.Done()
+					proxy.forward(ctx, message, envelope)
+				}()
+			} else {
+				// Everything else goes in order: later messages need the
+				// session initialize starts, and Flare should see
+				// notifications/initialized before the requests after it,
+				// even from a client that doesn't wait for the answers.
+				proxy.forward(ctx, message, envelope)
 			}
-			query.Set("organization_id", strconv.FormatInt(*input.OrganizationID, 10))
 		}
-		var response api.ProjectsResponse
-		err = client.Get(ctx, "/api/v1/projects", query, &response)
-		return nil, response, err
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "list_environments",
-		Description: "List accessible Flare environments, optionally filtered by project ID.",
-		InputSchema: objectSchema(mergeProperties(pagination, map[string]any{"project_id": positiveInteger}), nil),
-		Annotations: annotations,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input listEnvironmentsInput) (*mcp.CallToolResult, api.EnvironmentsResponse, error) {
-		query, err := catalogQuery(input.Cursor, input.Limit)
-		if err != nil {
-			return nil, api.EnvironmentsResponse{}, err
+		if errors.Is(readErr, io.EOF) {
+			return nil
 		}
-		if input.ProjectID != nil {
-			if *input.ProjectID <= 0 {
-				return nil, api.EnvironmentsResponse{}, fmt.Errorf("project_id must be positive")
-			}
-			query.Set("project_id", strconv.FormatInt(*input.ProjectID, 10))
+		if readErr != nil {
+			return readErr
 		}
-		var response api.EnvironmentsResponse
-		err = client.Get(ctx, "/api/v1/environments", query, &response)
-		return nil, response, err
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_environment_overviews",
-		Description: "Get bulk performance summaries for up to 25 Flare environments. " + changesHelp,
-		InputSchema: objectSchema(map[string]any{
-			"environment_ids": map[string]any{"type": "array", "items": positiveInteger, "minItems": 1, "maxItems": 25, "uniqueItems": true},
-			"hours":           hours,
-			"sort":            sort,
-			"limit":           map[string]any{"type": "integer", "minimum": 1, "maximum": 25, "default": 5},
-		}, []string{"environment_ids"}),
-		Annotations: annotations,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input overviewInput) (*mcp.CallToolResult, api.OverviewsResponse, error) {
-		if err := input.setDefaultsAndValidate(); err != nil {
-			return nil, api.OverviewsResponse{}, err
-		}
-		values := make([]string, len(input.EnvironmentIDs))
-		for index, id := range input.EnvironmentIDs {
-			values[index] = strconv.FormatInt(id, 10)
-		}
-		query := url.Values{
-			"environment_ids": {strings.Join(values, ",")},
-			"hours":           {strconv.Itoa(input.Hours)},
-			"sort":            {input.Sort},
-			"limit":           {strconv.Itoa(input.Limit)},
-		}
-		var response api.OverviewsResponse
-		err := client.Get(ctx, "/api/v1/overviews", query, &response)
-		return nil, response, err
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "list_namespace_operations",
-		Description: "List top operations for one Flare environment namespace. For the next page, pass pagination.next as cursor with the same other arguments.",
-		InputSchema: objectSchema(map[string]any{
-			"environment_id": positiveInteger,
-			"namespace":      namespace,
-			"hours":          hours,
-			"sort":           sort,
-			"direction":      map[string]any{"type": "string", "enum": directions, "default": "desc"},
-			"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
-			"q":              map[string]any{"type": "string", "maxLength": 255},
-			"cursor":         pagination["cursor"],
-		}, []string{"environment_id", "namespace"}),
-		Annotations: annotations,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input namespaceInput) (*mcp.CallToolResult, api.NamespaceResponse, error) {
-		if err := input.setDefaultsAndValidate(); err != nil {
-			return nil, api.NamespaceResponse{}, err
-		}
-		query := url.Values{
-			"environment_id": {strconv.FormatInt(input.EnvironmentID, 10)},
-			"namespace":      {input.Namespace},
-			"hours":          {strconv.Itoa(input.Hours)},
-			"sort":           {input.Sort},
-			"direction":      {input.Direction},
-			"limit":          {strconv.Itoa(input.Limit)},
-		}
-		if input.Query != "" {
-			query.Set("q", input.Query)
-		}
-		if input.Cursor != "" {
-			query.Set("cursor", input.Cursor)
-		}
-		var response api.NamespaceResponse
-		err := client.Get(ctx, "/api/v1/namespaces", query, &response)
-		return nil, response, err
-	})
-
-	text := map[string]any{"type": "string", "maxLength": maxFilterLength}
-	scopeProperties := map[string]any{
-		"environment_id": positiveInteger,
-		"namespace":      namespace,
-		"hours":          hours,
-	}
-	selectorProperties := map[string]any{"service": text, "target": text, "operation": text}
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_namespace_overview",
-		Description: "Mirror of the Flare namespace page: stats and a time series for one environment namespace plus the top operations by sum and by count (default 10, max 25), each with its own series. " + windowHelp + " " + seriesHelp,
-		InputSchema: objectSchema(mergeProperties(scopeProperties, map[string]any{
-			"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": maxSeriesLimit, "default": 10},
-		}), []string{"environment_id", "namespace"}),
-		Annotations: annotations,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input namespaceOverviewInput) (*mcp.CallToolResult, api.NamespaceOverviewResponse, error) {
-		input.setDefaults()
-		if input.Limit == 0 {
-			input.Limit = 10
-		}
-		if err := input.validate(true); err != nil {
-			return nil, api.NamespaceOverviewResponse{}, err
-		}
-		if input.Limit < 1 || input.Limit > maxSeriesLimit {
-			return nil, api.NamespaceOverviewResponse{}, fmt.Errorf("limit must be between 1 and %d", maxSeriesLimit)
-		}
-		query := input.values()
-		query.Set("limit", strconv.Itoa(input.Limit))
-		var response api.NamespaceOverviewResponse
-		err := client.Get(ctx, "/api/v1/namespaces/overview", query, &response)
-		return nil, response, err
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "query_metrics",
-		Description: "Generic Flare metrics query; the other metrics tools are presets of it. Flare stores count, total ms, and error count per (namespace, service, target, operation). Filter on any of the four dimensions, group_by any subset, rank groups by count, sum, avg, or error_rate (use min_count with rate sorts), and set series=true to attach series (limit <= 25 with series). " + windowHelp + " " + seriesHelp + " " + dimensionHelp + " Examples: error rate per status class for one controller (filter namespace=web + target, group_by operation); slowest hosts (namespace=http, group_by service, sort avg); jobs failing most (namespace=job, group_by target, sort error_rate, min_count 10). Totals across namespaces are not additive.",
-		InputSchema: objectSchema(mergeProperties(mergeProperties(scopeProperties, selectorProperties), map[string]any{
-			"group_by":  map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": dimensions}, "maxItems": len(dimensions), "uniqueItems": true},
-			"sort":      map[string]any{"type": "string", "enum": querySorts, "default": "sum"},
-			"direction": map[string]any{"type": "string", "enum": directions, "default": "desc"},
-			"limit":     map[string]any{"type": "integer", "minimum": 1, "maximum": maxQueryLimit, "default": 10},
-			"series":    map[string]any{"type": "boolean", "default": false},
-			"min_count": map[string]any{"type": "integer", "minimum": 0, "default": 0},
-		}), []string{"environment_id"}),
-		Annotations: annotations,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input queryInput) (*mcp.CallToolResult, api.QueryResponse, error) {
-		input.setDefaults()
-		if input.Sort == "" {
-			input.Sort = "sum"
-		}
-		if input.Direction == "" {
-			input.Direction = "desc"
-		}
-		if input.Limit == 0 {
-			input.Limit = 10
-		}
-		if err := errors.Join(input.scope.validate(false), input.selector.validate()); err != nil {
-			return nil, api.QueryResponse{}, err
-		}
-		maxLimit := maxQueryLimit
-		if input.Series {
-			maxLimit = maxSeriesLimit
-		}
-		if !slices.Contains(querySorts, input.Sort) || !slices.Contains(directions, input.Direction) ||
-			input.Limit < 1 || input.Limit > maxLimit || input.MinCount < 0 || !validGroupBy(input.GroupBy) {
-			return nil, api.QueryResponse{}, fmt.Errorf("invalid query arguments")
-		}
-		query := input.values()
-		input.selector.apply(query)
-		query.Set("sort", input.Sort)
-		query.Set("direction", input.Direction)
-		query.Set("limit", strconv.Itoa(input.Limit))
-		if len(input.GroupBy) > 0 {
-			query.Set("group_by", strings.Join(input.GroupBy, ","))
-		}
-		if input.Series {
-			query.Set("series", "true")
-		}
-		if input.MinCount > 0 {
-			query.Set("min_count", strconv.Itoa(input.MinCount))
-		}
-		var response api.QueryResponse
-		err := client.Get(ctx, "/api/v1/metrics/query", query, &response)
-		return nil, response, err
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_operation_series",
-		Description: "Mirror of the Flare operation page: stats and a time series for one environment namespace, narrowed to one operation by the service/target/operation selector from list_namespace_operations or get_namespace_overview (omit all three for the namespace total). " + windowHelp + " " + seriesHelp + " " + changesHelp,
-		InputSchema: objectSchema(mergeProperties(scopeProperties, selectorProperties), []string{"environment_id", "namespace"}),
-		Annotations: annotations,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input seriesInput) (*mcp.CallToolResult, api.OperationSeriesResponse, error) {
-		input.setDefaults()
-		if err := errors.Join(input.scope.validate(true), input.selector.validate()); err != nil {
-			return nil, api.OperationSeriesResponse{}, err
-		}
-		query := input.values()
-		input.selector.apply(query)
-		var response api.OperationSeriesResponse
-		err := client.Get(ctx, "/api/v1/series", query, &response)
-		return nil, response, err
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name: "list_changes",
-		Description: "List the deploys in a Flare environment over a window, newest first, detected from the revision the Flare gem reports. " +
-			"Each has its revision and previous_revision, rollback, occurred_at and finished_at (null while still rolling out), " +
-			"rollout_seconds, and bucket: the start of the series bucket it began in, so it lines up with get_operation_series " +
-			"and query_metrics buckets for the same hours. get_operation_series and get_environment_overviews include these as changes already.",
-		InputSchema: objectSchema(map[string]any{"environment_id": positiveInteger, "hours": hours}, []string{"environment_id"}),
-		Annotations: annotations,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input scope) (*mcp.CallToolResult, api.ChangesResponse, error) {
-		input.setDefaults()
-		if err := input.validate(false); err != nil {
-			return nil, api.ChangesResponse{}, err
-		}
-		var response api.ChangesResponse
-		err := client.Get(ctx, "/api/v1/changes", input.values(), &response)
-		return nil, response, err
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name: "list_traces",
-		Description: "List traces captured in a Flare environment, newest first: root_name, started_at, duration_ms, span_count, and the rule that captured it. " +
-			"Narrow to one operation with namespace (web or job) and target together, using the target from list_namespace_operations " +
-			"(e.g. UsersController#show or EventJob). Pass pagination.next as cursor for older traces. Read one with get_trace.",
-		InputSchema: objectSchema(map[string]any{
-			"environment_id": positiveInteger,
-			"namespace":      map[string]any{"type": "string", "enum": traceableNamespaces},
-			"target":         text,
-			"cursor":         pagination["cursor"],
-			"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
-		}, []string{"environment_id"}),
-		Annotations: annotations,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input tracesInput) (*mcp.CallToolResult, api.TracesResponse, error) {
-		if input.Limit == 0 {
-			input.Limit = 50
-		}
-		if input.EnvironmentID <= 0 {
-			return nil, api.TracesResponse{}, errors.New("environment is required")
-		}
-		if (input.Namespace == "") != (input.Target == "") {
-			return nil, api.TracesResponse{}, errors.New("namespace and target go together")
-		}
-		if input.Namespace != "" && !slices.Contains(traceableNamespaces, input.Namespace) {
-			return nil, api.TracesResponse{}, errors.New("traces are captured for web and job operations only")
-		}
-		target := selector{Target: input.Target}
-		if err := target.validate(); err != nil {
-			return nil, api.TracesResponse{}, err
-		}
-		query, err := catalogQuery(input.Cursor, input.Limit)
-		if err != nil {
-			return nil, api.TracesResponse{}, err
-		}
-		query.Set("environment_id", strconv.FormatInt(input.EnvironmentID, 10))
-		if input.Namespace != "" {
-			query.Set("namespace", input.Namespace)
-			target.apply(query)
-		}
-		var response api.TracesResponse
-		err = client.Get(ctx, "/api/v1/traces", query, &response)
-		return nil, response, err
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name: "get_trace",
-		Description: "Get one captured trace's spans in tree order: name, label, kind (sql, cache, view, http, mailer, job, controller, other), " +
-			"depth, parent_id, offset_ms from the trace start, duration_ms, and source (file:line) when recorded. " +
-			"Past " + strconv.Itoa(maxTraceSpans) + " spans, repeated siblings (like an N+1's queries) are collapsed into one span with a count " +
-			"and their total duration_ms. available is false when the spans haven't arrived yet.",
-		InputSchema: objectSchema(map[string]any{"id": positiveInteger}, []string{"id"}),
-		Annotations: annotations,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input traceInput) (*mcp.CallToolResult, api.TraceResponse, error) {
-		if input.ID <= 0 {
-			return nil, api.TraceResponse{}, fmt.Errorf("id must be positive")
-		}
-		var response api.TraceResponse
-		err := client.Get(ctx, "/api/v1/traces/"+strconv.FormatInt(input.ID, 10), nil, &response)
-		return nil, response, err
-	})
-
-	return server
-}
-
-func readOnlyToolAnnotations() *mcp.ToolAnnotations {
-	falseValue := false
-	return &mcp.ToolAnnotations{
-		ReadOnlyHint:    true,
-		DestructiveHint: &falseValue,
-		IdempotentHint:  true,
-		OpenWorldHint:   &falseValue,
 	}
 }
 
-func objectSchema(properties map[string]any, required []string) map[string]any {
-	schema := map[string]any{"type": "object", "additionalProperties": false, "properties": properties}
-	if len(required) > 0 {
-		schema["required"] = required
+func (proxy *mcpProxy) forward(ctx context.Context, message []byte, envelope rpcEnvelope) {
+	answered, err := proxy.post(ctx, message, envelope)
+	if !envelope.isRequest() || answered {
+		return
 	}
-	return schema
+	if err == nil {
+		err = errors.New("Flare ended the response without answering")
+	}
+	proxy.writeError(envelope.ID, err)
 }
 
-func mergeProperties(left, right map[string]any) map[string]any {
-	result := make(map[string]any, len(left)+len(right))
-	for key, value := range left {
-		result[key] = value
+// post sends one message and writes Flare's replies, reporting whether one of
+// them answered the message.
+func (proxy *mcpProxy) post(ctx context.Context, message []byte, envelope rpcEnvelope) (bool, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, proxy.endpoint, bytes.NewReader(message))
+	if err != nil {
+		return false, err
 	}
-	for key, value := range right {
-		result[key] = value
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	proxy.mutex.Lock()
+	if proxy.sessionID != "" {
+		request.Header.Set("Mcp-Session-Id", proxy.sessionID)
 	}
-	return result
-}
+	if proxy.protocolVersion != "" {
+		request.Header.Set("Mcp-Protocol-Version", proxy.protocolVersion)
+	}
+	proxy.mutex.Unlock()
 
-func catalogQuery(cursor string, limit int) (url.Values, error) {
-	if limit == 0 {
-		limit = 100
+	response, err := proxy.httpClient.Do(request)
+	if err != nil {
+		return false, fmt.Errorf("request Flare: %w", err)
 	}
-	if limit < 1 || limit > 100 {
-		return nil, fmt.Errorf("limit must be between 1 and 100")
+	defer response.Body.Close()
+	if sessionID := response.Header.Get("Mcp-Session-Id"); sessionID != "" {
+		proxy.mutex.Lock()
+		proxy.sessionID = sessionID
+		proxy.mutex.Unlock()
 	}
-	query := url.Values{"limit": {strconv.Itoa(limit)}}
-	if cursor != "" {
-		query.Set("cursor", cursor)
-	}
-	return query, nil
-}
 
-func (input *overviewInput) setDefaultsAndValidate() error {
-	if input.Hours == 0 {
-		input.Hours = 24
-	}
-	if input.Sort == "" {
-		input.Sort = "sum"
-	}
-	if input.Limit == 0 {
-		input.Limit = 5
-	}
-	if len(input.EnvironmentIDs) == 0 || len(input.EnvironmentIDs) > 25 {
-		return fmt.Errorf("environment_ids must contain between 1 and 25 IDs")
-	}
-	seen := make(map[int64]struct{}, len(input.EnvironmentIDs))
-	for _, id := range input.EnvironmentIDs {
-		if id <= 0 {
-			return fmt.Errorf("environment_ids must contain only positive IDs")
+	status := response.StatusCode
+	switch {
+	case status == http.StatusAccepted:
+		return false, nil
+	case status >= 300 && status < 400:
+		return false, fmt.Errorf("Flare redirected %s to %q; not following it with your token", proxy.endpoint, response.Header.Get("Location"))
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		apiError := api.ReadError(response)
+		apiError.Hint = proxy.authHint
+		if status == http.StatusForbidden {
+			apiError.Hint = proxy.scopeHint
 		}
-		if _, exists := seen[id]; exists {
-			return fmt.Errorf("environment_ids must not contain duplicates")
-		}
-		seen[id] = struct{}{}
+		return false, apiError
 	}
-	if !slices.Contains(allowedHours, input.Hours) || !slices.Contains(sorts, input.Sort) || input.Limit < 1 || input.Limit > 25 {
-		return fmt.Errorf("invalid overview arguments")
+
+	replies := &replyWriter{proxy: proxy, requestID: compactID(envelope.ID), initialize: envelope.Method == "initialize"}
+	mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if mediaType == "text/event-stream" && status < 300 {
+		err := readEvents(response.Body, replies.write)
+		return replies.answered, err
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxMCPMessage))
+	if err != nil {
+		return false, fmt.Errorf("read Flare response: %w", err)
+	}
+	if status >= 300 {
+		// A JSON-RPC error in the body says more than the status does.
+		if json.Valid(body) && bytes.Contains(body, []byte(`"jsonrpc"`)) {
+			replies.write(body)
+			return replies.answered, nil
+		}
+		response.Body = io.NopCloser(bytes.NewReader(body))
+		return false, api.ReadError(response)
+	}
+	if len(bytes.TrimSpace(body)) > 0 {
+		replies.write(body)
+	}
+	return replies.answered, nil
+}
+
+// endSession tells Flare the client is done, as the transport asks clients to.
+func (proxy *mcpProxy) endSession() {
+	proxy.mutex.Lock()
+	sessionID := proxy.sessionID
+	proxy.mutex.Unlock()
+	if sessionID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, proxy.endpoint, nil)
+	if err != nil {
+		return
+	}
+	request.Header.Set("Mcp-Session-Id", sessionID)
+	if response, err := proxy.httpClient.Do(request); err == nil {
+		response.Body.Close()
+	}
+}
+
+func (proxy *mcpProxy) writeError(id json.RawMessage, err error) {
+	message, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"error":   map[string]any{"code": -32000, "message": err.Error()},
+	})
+	proxy.writeLine(message)
+}
+
+// writeLine writes one message on its own line, as the stdio transport
+// requires, so a pretty-printed reply is compacted first.
+func (proxy *mcpProxy) writeLine(message []byte) {
+	var line bytes.Buffer
+	if err := json.Compact(&line, message); err != nil {
+		line.Reset()
+		line.Write(bytes.ReplaceAll(message, []byte("\n"), nil))
+	}
+	line.WriteByte('\n')
+	proxy.writeMutex.Lock()
+	defer proxy.writeMutex.Unlock()
+	_, _ = proxy.output.Write(line.Bytes())
+}
+
+// replyWriter writes the replies to one request and notes whether one of
+// them answered it.
+type replyWriter struct {
+	proxy      *mcpProxy
+	requestID  string
+	initialize bool
+	answered   bool
+}
+
+func (replies *replyWriter) write(message []byte) {
+	var envelope rpcEnvelope
+	if json.Unmarshal(message, &envelope) == nil && envelope.Method == "" && compactID(envelope.ID) == replies.requestID {
+		replies.answered = true
+		if replies.initialize && envelope.Result != nil {
+			// Set before the client sees the answer, so its next
+			// message carries the version.
+			replies.proxy.mutex.Lock()
+			replies.proxy.protocolVersion = envelope.Result.ProtocolVersion
+			replies.proxy.mutex.Unlock()
+		}
+	}
+	replies.proxy.writeLine(message)
+}
+
+func compactID(id json.RawMessage) string {
+	var compacted bytes.Buffer
+	if json.Compact(&compacted, id) != nil {
+		return string(id)
+	}
+	return compacted.String()
+}
+
+// readEvents calls write with the data of each message event in a
+// text/event-stream body.
+func readEvents(body io.Reader, write func([]byte)) error {
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 64<<10), maxMCPMessage)
+	event := ""
+	var data [][]byte
+	dispatch := func() {
+		if len(data) > 0 && (event == "" || event == "message") {
+			write(bytes.Join(data, []byte("\n")))
+		}
+		event, data = "", nil
+	}
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			dispatch()
+			continue
+		}
+		field, value, _ := bytes.Cut(line, []byte(":"))
+		value = bytes.TrimPrefix(value, []byte(" "))
+		switch string(field) {
+		case "event":
+			event = string(value)
+		case "data":
+			data = append(data, bytes.Clone(value))
+		}
+	}
+	dispatch()
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read Flare event stream: %w", err)
 	}
 	return nil
-}
-
-func (input *namespaceInput) setDefaultsAndValidate() error {
-	if input.Hours == 0 {
-		input.Hours = 24
-	}
-	if input.Sort == "" {
-		input.Sort = "sum"
-	}
-	if input.Direction == "" {
-		input.Direction = "desc"
-	}
-	if input.Limit == 0 {
-		input.Limit = 25
-	}
-	if input.EnvironmentID <= 0 || !slices.Contains(namespaces, input.Namespace) || !slices.Contains(allowedHours, input.Hours) ||
-		!slices.Contains(sorts, input.Sort) || !slices.Contains(directions, input.Direction) ||
-		input.Limit < 1 || input.Limit > 100 || utf8.RuneCountInString(input.Query) > 255 {
-		return fmt.Errorf("invalid namespace arguments")
-	}
-	return nil
-}
-
-// validGroupBy accepts a subset of the dimensions with no repeats.
-func validGroupBy(values []string) bool {
-	for index, value := range values {
-		if !slices.Contains(dimensions, value) || slices.Contains(values[:index], value) {
-			return false
-		}
-	}
-	return true
 }

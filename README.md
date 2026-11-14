@@ -84,7 +84,7 @@ flare-cli setup --token
 
 ### Local MCP server
 
-`flare-cli mcp` runs the same tools as a local stdio server that calls Flare's read API with your personal access token, for clients or machines where the hosted server doesn't fit. Configure it with:
+`flare-cli mcp` is a stdio MCP server for clients that only run local servers. It forwards each message to Flare's hosted MCP server with your personal access token (from `auth login` or `FLARE_TOKEN`, honoring `--api-url`) and writes the replies back, so it always offers the hosted server's tools. Configure it with:
 
 ```sh
 flare-cli auth login
@@ -118,4 +118,4 @@ It has this shape:
 }
 ```
 
-It exposes the same eleven read tools as the hosted server: the three catalog tools, the presets `get_environment_overviews`, `get_namespace_overview`, `list_namespace_operations`, and `get_operation_series`, the generic `query_metrics`, deploys with `list_changes`, and captured traces with `list_traces` and `get_trace`. It does not expose any write operation. The trace tools need the `traces:read` scope, which `auth login` grants; a token from before it existed gets a 403 naming the scope, and signing in again fixes it.
+It offers whatever the hosted server does, which is read-only. If your token is missing a scope a tool needs, the tool's error says so, and `auth login` fixes it.
