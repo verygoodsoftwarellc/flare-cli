@@ -14,8 +14,7 @@ import (
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
 )
 
-// The server's allowed values, shared by the CLI help text, the MCP tool
-// schemas, and the MCP argument validation.
+// The server's allowed values, shared by the CLI help text and validation.
 var (
 	allowedHours = []int{1, 6, 24, 48, 168, 672}
 	namespaces   = []string{"web", "job", "db", "http", "cache", "view"}
@@ -47,11 +46,10 @@ func joinInts(values []int) string {
 }
 
 // scope is the environment, namespace, and window every metrics call takes.
-// The same struct binds CLI flags and decodes MCP arguments.
 type scope struct {
-	EnvironmentID int64  `json:"environment_id"`
-	Namespace     string `json:"namespace"`
-	Hours         int    `json:"hours"`
+	EnvironmentID int64
+	Namespace     string
+	Hours         int
 }
 
 func (s *scope) bindFlags(command *cobra.Command, namespaceHelp string) {
@@ -60,14 +58,6 @@ func (s *scope) bindFlags(command *cobra.Command, namespaceHelp string) {
 		command.Flags().StringVarP(&s.Namespace, "namespace", "n", "", namespaceHelp)
 	}
 	command.Flags().IntVar(&s.Hours, "hours", 24, "time window: "+joinInts(allowedHours))
-}
-
-// setDefaults fills the window the way the CLI flag default does, for MCP
-// inputs that omit it.
-func (s *scope) setDefaults() {
-	if s.Hours == 0 {
-		s.Hours = 24
-	}
 }
 
 func (s scope) validate(namespaceRequired bool) error {
@@ -99,9 +89,9 @@ func (s scope) values() url.Values {
 
 // selector narrows to one operation by exact service / target / operation.
 type selector struct {
-	Service   string `json:"service"`
-	Target    string `json:"target"`
-	Operation string `json:"operation"`
+	Service   string
+	Target    string
+	Operation string
 }
 
 func (s *selector) bindFlags(command *cobra.Command) {

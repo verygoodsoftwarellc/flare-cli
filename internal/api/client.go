@@ -23,6 +23,9 @@ type Client struct {
 	// AuthHint is appended to 401 errors (an expired or revoked token) so
 	// they say how to sign in again.
 	AuthHint string
+	// ScopeHint is appended to 403 errors, which name a scope the token
+	// lacks, such as traces:read on a token from before it existed.
+	ScopeHint string
 }
 
 type APIError struct {
@@ -91,8 +94,11 @@ func (client *Client) Get(ctx context.Context, path string, query url.Values, ou
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		apiError := ReadError(response)
-		if response.StatusCode == http.StatusUnauthorized {
+		switch response.StatusCode {
+		case http.StatusUnauthorized:
 			apiError.Hint = client.AuthHint
+		case http.StatusForbidden:
+			apiError.Hint = client.ScopeHint
 		}
 		return apiError
 	}

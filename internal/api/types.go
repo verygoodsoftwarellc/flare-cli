@@ -65,6 +65,7 @@ type Window struct {
 type Overview struct {
 	Environment Environment `json:"environment"`
 	Window
+	Changes     []Change    `json:"changes,omitempty"`
 	DataThrough *string     `json:"data_through"`
 	Namespaces  []Namespace `json:"namespaces"`
 }
@@ -104,6 +105,7 @@ type SeriesEnvelope struct {
 type OperationSeriesResponse struct {
 	SeriesEnvelope
 	Selector Selector `json:"selector"`
+	Changes  []Change `json:"changes,omitempty"`
 }
 
 type RankedOperation struct {
@@ -174,4 +176,21 @@ type NamespaceResponse struct {
 	Window
 	Operations []Metric   `json:"operations"`
 	Pagination Pagination `json:"pagination"`
+}
+
+// Change is a deploy detected from the revision the Flare gem reports.
+// FinishedAt and RolloutSeconds are null while it is still rolling out, and
+// Bucket, the start of the series bucket it began in, is null when it began
+// before the window.
+type Change struct {
+	ID               int64    `json:"id"`
+	Kind             string   `json:"kind"`
+	Title            string   `json:"title"`
+	Revision         string   `json:"revision"`
+	PreviousRevision *string  `json:"previous_revision"`
+	Rollback         bool     `json:"rollback"`
+	OccurredAt       string   `json:"occurred_at"`
+	FinishedAt       *string  `json:"finished_at"`
+	RolloutSeconds   *float64 `json:"rollout_seconds"`
+	Bucket           *string  `json:"bucket"`
 }
