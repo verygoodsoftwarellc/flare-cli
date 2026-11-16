@@ -161,7 +161,7 @@ func TestRemoteSetupConfiguresEveryDetectedClientForOAuth(t *testing.T) {
 		"Claude Code: run /mcp",
 		"Codex: run `codex mcp login flare`",
 		"Cursor: open Cursor Settings",
-		"Claude Desktop: in Settings → Connectors, choose Add custom connector and enter " + testRemoteURL,
+		"Claude Desktop: in Settings, add a custom connector with the URL " + testRemoteURL,
 		"Then ask:",
 	} {
 		if !strings.Contains(got, want) {

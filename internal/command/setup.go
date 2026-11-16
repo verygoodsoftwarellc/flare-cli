@@ -196,7 +196,7 @@ func (installer *mcpInstaller) installRemote(ctx context.Context, client string,
 	case "cursor":
 		return installer.installCursorRemote(remote)
 	case "claude-desktop":
-		hint := "in Settings → Connectors, choose Add custom connector and enter " + remote.url
+		hint := "in Settings, add a custom connector with the URL " + remote.url
 		if remote.token != "" {
 			hint += " (connectors sign in to Flare themselves; --token doesn't apply)"
 		}
