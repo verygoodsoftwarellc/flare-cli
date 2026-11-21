@@ -12,6 +12,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
@@ -371,11 +372,31 @@ func writeJSON(writer io.Writer, value any) error {
 
 func writeTable(writer io.Writer, header []string, rows [][]string) error {
 	table := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(table, strings.Join(header, "\t"))
+	fmt.Fprintln(table, joinCells(header))
 	for _, row := range rows {
-		fmt.Fprintln(table, strings.Join(row, "\t"))
+		fmt.Fprintln(table, joinCells(row))
 	}
 	return table.Flush()
+}
+
+func joinCells(cells []string) string {
+	printed := make([]string, len(cells))
+	for index, cell := range cells {
+		printed[index] = printable(cell)
+	}
+	return strings.Join(printed, "\t")
+}
+
+// printable drops control characters, such as tabs, newlines and escape
+// sequences, from text the server sent, so a stray one in a name can't shift
+// a table's columns or change how the terminal shows the rest of the output.
+func printable(text string) string {
+	return strings.Map(func(char rune) rune {
+		if unicode.IsControl(char) {
+			return -1
+		}
+		return char
+	}, text)
 }
 
 func organizationRows(organizations []api.Organization) [][]string {

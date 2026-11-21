@@ -54,3 +54,31 @@ func TestOverviewListsDeploysLikeTheEnvironmentPage(t *testing.T) {
 		t.Fatalf("environment without deploys got a section:\n%s", text)
 	}
 }
+
+func TestTablesAndHeadingsDropControlCharacters(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{"overviews":[{"environment":{"id":1,"project_id":1,"name":"Prod\u001b[2J\nuction"},
+			"changes":[{"id":1,"kind":"deploy","title":"Deploy","revision":"rel\t1\u001b[0m\u009b","previous_revision":null,"rollback":false,"occurred_at":"2026-11-20T12:00:00Z","finished_at":null,"rollout_seconds":null,"bucket":null}],
+			"namespaces":[{"namespace":"web","impact":100,"count":1,"sum":5,"avg":5,"error_rate":0,"operations":[{"operation":"Users\u001b[31m#index","impact":100,"count":1,"sum":5,"avg":5,"error_rate":0}]}]}]}`))
+	}))
+	defer server.Close()
+	t.Setenv("FLARE_TOKEN", "flare_pat_test")
+
+	output := &bytes.Buffer{}
+	options := &rootOptions{name: "flare-cli", apiURL: server.URL, output: output, errors: &bytes.Buffer{}}
+	command := newOverviewCommand(options)
+	command.SetArgs([]string{"-e", "1"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	text := output.String()
+	if strings.ContainsAny(text, "\x1b\t\u009b") {
+		t.Fatalf("control characters reached the output: %q", text)
+	}
+	for _, want := range []string{"\nProd[2Juction web: top operations by sum\n", "Users[31m#index", "\nProd[2Juction: deploys\n", "rel1[0m"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in %q", want, text)
+		}
+	}
+}
