@@ -387,12 +387,14 @@ func joinCells(cells []string) string {
 	return strings.Join(printed, "\t")
 }
 
-// printable drops control characters, such as tabs, newlines and escape
-// sequences, from text the server sent, so a stray one in a name can't shift
-// a table's columns or change how the terminal shows the rest of the output.
+// printable keeps only visible characters and spaces from text the server
+// sent. Tabs, newlines, escape sequences, line separators and invisible
+// formatting characters (such as text direction overrides) are dropped, so a
+// stray one in a name can't shift a table's columns or change how the
+// terminal shows the rest of the output.
 func printable(text string) string {
 	return strings.Map(func(char rune) rune {
-		if unicode.IsControl(char) {
+		if !unicode.IsGraphic(char) {
 			return -1
 		}
 		return char
