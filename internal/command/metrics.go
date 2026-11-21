@@ -196,14 +196,67 @@ func seriesRows(buckets []string, resolution string, series api.Series) ([][]str
 // with the zone so the repeated hour when clocks fall back stays distinct.
 // Day buckets are calendar days, so they keep the date the server sent.
 func bucketTime(value, resolution string) string {
+	if resolution != "day" {
+		return localTime(value)
+	}
 	start, err := time.Parse(time.RFC3339, value)
 	if err != nil {
 		return value
 	}
-	if resolution == "day" {
-		return start.Format(time.DateOnly)
+	return start.Format(time.DateOnly)
+}
+
+// localTime shows a server timestamp in local time, with the zone.
+func localTime(value string) string {
+	moment, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return value
 	}
-	return start.Local().Format("2006-01-02 15:04 MST")
+	return moment.Local().Format("2006-01-02 15:04 MST")
+}
+
+// deployRows lists deploys the way the environment page's Deploys table does:
+// start time, short revision (marked when it's a rollback), and rollout.
+func deployRows(changes []api.Change) [][]string {
+	rows := make([][]string, 0, len(changes))
+	for _, change := range changes {
+		revision := shortRevision(change.Revision)
+		if change.Rollback {
+			revision += " rollback"
+		}
+		rows = append(rows, []string{localTime(change.OccurredAt), revision, deployRollout(change.RolloutSeconds)})
+	}
+	return rows
+}
+
+// shortRevision matches Flare's: 7 characters of a hex SHA, else up to 12.
+func shortRevision(revision string) string {
+	if len(revision) >= 7 && strings.Trim(strings.ToLower(revision), "0123456789abcdef") == "" {
+		return revision[:7]
+	}
+	if runes := []rune(revision); len(runes) > 12 {
+		return string(runes[:12])
+	}
+	return revision
+}
+
+// deployRollout matches the environment page's rollout column.
+func deployRollout(seconds *float64) string {
+	if seconds == nil {
+		return "rolling out"
+	}
+	whole := int(*seconds)
+	if whole < 1 {
+		return "instant"
+	}
+	if whole < 60 {
+		return fmt.Sprintf("%ds", whole)
+	}
+	minutes, rest := whole/60, whole%60
+	if rest == 0 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	return fmt.Sprintf("%dm %ds", minutes, rest)
 }
 
 func dataThrough(value *string, resolution string) string {
@@ -267,10 +320,19 @@ func newOverviewCommand(options *rootOptions) *cobra.Command {
 					if len(namespace.Operations) == 0 {
 						continue
 					}
-					fmt.Fprintf(options.output, "\n%s %s: top operations by %s\n", overview.Environment.Name, namespace.Namespace, sort)
+					fmt.Fprintf(options.output, "\n%s %s: top operations by %s\n", printable(overview.Environment.Name), printable(namespace.Namespace), sort)
 					if err := writeTable(options.output, operationHeader, metricRows(namespace.Operations)); err != nil {
 						return err
 					}
+				}
+			}
+			for _, overview := range response.Overviews {
+				if len(overview.Changes) == 0 {
+					continue
+				}
+				fmt.Fprintf(options.output, "\n%s: deploys\n", printable(overview.Environment.Name))
+				if err := writeTable(options.output, []string{"TIME", "REVISION", "ROLLOUT"}, deployRows(overview.Changes)); err != nil {
+					return err
 				}
 			}
 			return nil
@@ -355,7 +417,7 @@ func newNamespaceOverviewCommand(options *rootOptions) *cobra.Command {
 				return writeJSON(options.output, response)
 			}
 			fmt.Fprintf(options.output, "%s %s: %s, %s of environment time (%d %s buckets, %s)\n\n",
-				response.Environment.Name, response.Namespace, statsSummary(response.Stats), impactCell(response.Stats.Impact),
+				printable(response.Environment.Name), printable(response.Namespace), statsSummary(response.Stats), impactCell(response.Stats.Impact),
 				len(response.Buckets), response.Bucket, dataThrough(response.DataThrough, response.Bucket))
 			fmt.Fprintln(options.output, "Top by sum")
 			if err := writeTable(options.output, operationHeader, rankedRows(response.TopBySum)); err != nil {
@@ -400,7 +462,7 @@ func newSeriesCommand(options *rootOptions) *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(options.output, "%s %s: %s (%d %s buckets, %s)\n\n",
-				response.Environment.Name, response.Namespace, statsSummary(response.Stats),
+				printable(response.Environment.Name), printable(response.Namespace), statsSummary(response.Stats),
 				len(response.Buckets), response.Bucket, dataThrough(response.DataThrough, response.Bucket))
 			return writeTable(options.output, append([]string{"TIME"}, statsHeader...), rows)
 		},
@@ -456,7 +518,7 @@ func newQueryCommand(options *rootOptions) *cobra.Command {
 				return writeJSON(options.output, response)
 			}
 			fmt.Fprintf(options.output, "%s: %s (%s)\n",
-				response.Environment.Name, statsSummary(response.Total.Stats), dataThrough(response.DataThrough, response.Bucket))
+				printable(response.Environment.Name), statsSummary(response.Total.Stats), dataThrough(response.DataThrough, response.Bucket))
 			if len(response.Groups) == 0 {
 				return nil
 			}
