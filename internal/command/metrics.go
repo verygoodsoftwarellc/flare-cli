@@ -206,6 +206,49 @@ func bucketTime(value, resolution string) string {
 	return start.Local().Format("2006-01-02 15:04 MST")
 }
 
+// deployRows lists deploys the way the environment page's Deploys table does:
+// start time, short revision (marked when it's a rollback), and rollout.
+func deployRows(changes []api.Change) [][]string {
+	rows := make([][]string, 0, len(changes))
+	for _, change := range changes {
+		revision := shortRevision(change.Revision)
+		if change.Rollback {
+			revision += " rollback"
+		}
+		rows = append(rows, []string{bucketTime(change.OccurredAt, "minute"), revision, deployRollout(change.RolloutSeconds)})
+	}
+	return rows
+}
+
+// shortRevision matches Flare's: 7 characters of a hex SHA, else up to 12.
+func shortRevision(revision string) string {
+	length := 12
+	if len(revision) >= 7 && strings.Trim(strings.ToLower(revision), "0123456789abcdef") == "" {
+		length = 7
+	}
+	if runes := []rune(revision); len(runes) > length {
+		return string(runes[:length])
+	}
+	return revision
+}
+
+// deployRollout matches the environment page's rollout column.
+func deployRollout(seconds *float64) string {
+	switch {
+	case seconds == nil:
+		return "rolling out"
+	case *seconds < 1:
+		return "instant"
+	case *seconds < 60:
+		return fmt.Sprintf("%ds", int(*seconds))
+	}
+	minutes, rest := int(*seconds)/60, int(*seconds)%60
+	if rest == 0 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	return fmt.Sprintf("%dm %ds", minutes, rest)
+}
+
 func dataThrough(value *string, resolution string) string {
 	if value == nil {
 		return "no data"
@@ -271,6 +314,15 @@ func newOverviewCommand(options *rootOptions) *cobra.Command {
 					if err := writeTable(options.output, operationHeader, metricRows(namespace.Operations)); err != nil {
 						return err
 					}
+				}
+			}
+			for _, overview := range response.Overviews {
+				if len(overview.Changes) == 0 {
+					continue
+				}
+				fmt.Fprintf(options.output, "\n%s: deploys\n", overview.Environment.Name)
+				if err := writeTable(options.output, []string{"TIME", "REVISION", "ROLLOUT"}, deployRows(overview.Changes)); err != nil {
+					return err
 				}
 			}
 			return nil
