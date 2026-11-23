@@ -43,7 +43,7 @@ func (err *APIError) Error() string {
 		detail = http.StatusText(err.Status)
 	}
 	if err.Status == http.StatusTooManyRequests && err.RetryAfter != "" {
-		if _, parseErr := strconv.ParseUint(err.RetryAfter, 10, 64); parseErr == nil {
+		if strings.Trim(err.RetryAfter, "0123456789") == "" {
 			detail += "; retry in " + err.RetryAfter + "s"
 		} else if retryAt, parseErr := http.ParseTime(err.RetryAfter); parseErr == nil {
 			detail += "; retry after " + retryAt.UTC().Format(http.TimeFormat)

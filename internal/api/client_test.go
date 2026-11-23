@@ -39,7 +39,10 @@ func TestGetExplainsRateLimit(t *testing.T) {
 		wantHint   string
 	}{
 		{"seconds", "12", "; retry in 12s"},
+		{"large delay", "18446744073709551616", "; retry in 18446744073709551616s"},
 		{"date", "Fri, 31 Dec 2027 23:59:59 GMT", "; retry after Fri, 31 Dec 2027 23:59:59 GMT"},
+		{"legacy RFC 850 date", "Friday, 31-Dec-27 23:59:59 GMT", "; retry after Fri, 31 Dec 2027 23:59:59 GMT"},
+		{"legacy asctime date", "Fri Dec 31 23:59:59 2027", "; retry after Fri, 31 Dec 2027 23:59:59 GMT"},
 		{"invalid", "soon", ""},
 		{"absent", "", ""},
 	}
