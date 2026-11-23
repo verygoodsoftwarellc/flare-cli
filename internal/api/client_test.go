@@ -33,17 +33,34 @@ func TestGetAuthenticatesAndDecodes(t *testing.T) {
 }
 
 func TestGetExplainsRateLimit(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("Retry-After", "12")
-		writer.WriteHeader(http.StatusTooManyRequests)
-		_, _ = writer.Write([]byte(`{"detail":"Rate limit exceeded","request_id":"abc"}`))
-	}))
-	defer server.Close()
+	testCases := []struct {
+		name       string
+		retryAfter string
+		wantHint   string
+	}{
+		{"seconds", "12", "; retry in 12s"},
+		{"date", "Fri, 31 Dec 2027 23:59:59 GMT", "; retry after Fri, 31 Dec 2027 23:59:59 GMT"},
+		{"invalid", "soon", ""},
+		{"absent", "", ""},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				if testCase.retryAfter != "" {
+					writer.Header().Set("Retry-After", testCase.retryAfter)
+				}
+				writer.WriteHeader(http.StatusTooManyRequests)
+				_, _ = writer.Write([]byte(`{"detail":"Rate limit exceeded","request_id":"abc"}`))
+			}))
+			defer server.Close()
 
-	client := New(server.URL, "flare_pat_test")
-	err := client.Get(context.Background(), "/api/v1/overviews", nil, &map[string]any{})
-	if err == nil || !strings.Contains(err.Error(), "retry in 12s") || !strings.Contains(err.Error(), "request abc") {
-		t.Fatalf("unexpected error %v", err)
+			client := New(server.URL, "flare_pat_test")
+			err := client.Get(context.Background(), "/api/v1/overviews", nil, &map[string]any{})
+			want := "Rate limit exceeded" + testCase.wantHint + " (request abc)"
+			if err == nil || err.Error() != want {
+				t.Fatalf("error = %v, want %q", err, want)
+			}
+		})
 	}
 }
 
