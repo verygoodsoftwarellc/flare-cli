@@ -532,8 +532,7 @@ func TestLoginWithTokenStopsAtTheFirstLine(t *testing.T) {
 	defer typing.Close()
 	go func() { _, _ = typing.Write([]byte("\n  flare_pat_typed\r\n")) }()
 
-	output := &bytes.Buffer{}
-	options := &rootOptions{name: "flare-cli", apiURL: server.URL, output: output, errors: &bytes.Buffer{}, input: input}
+	options := &rootOptions{name: "flare-cli", apiURL: server.URL, output: &bytes.Buffer{}, errors: &bytes.Buffer{}, input: input}
 	command := newAuthCommand(options)
 	command.SetArgs([]string{"login", "--with-token"})
 	done := make(chan error, 1)
