@@ -5,7 +5,7 @@ package testenv
 import (
 	"fmt"
 	"os"
-	"strings"
+	"path/filepath"
 	"testing"
 
 	"github.com/zalando/go-keyring"
@@ -51,7 +51,7 @@ func Check(t *testing.T) {
 		t.Fatal("testenv.Run is not in effect")
 	}
 	for _, directory := range []string{directory, os.Getenv("CLAUDE_CONFIG_DIR")} {
-		if !strings.HasPrefix(directory, home) {
+		if relative, err := filepath.Rel(home, directory); err != nil || !filepath.IsLocal(relative) {
 			t.Fatalf("config directory %q is outside the throwaway home %s", directory, home)
 		}
 	}
