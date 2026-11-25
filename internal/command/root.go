@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -233,8 +234,28 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 // that, like a password prompt, doesn't show the token.
 func (options *rootOptions) readToken() (string, error) {
 	if file, ok := options.input.(*os.File); ok && term.IsTerminal(int(file.Fd())) {
+		fd := int(file.Fd())
+		state, err := term.GetState(fd)
+		if err != nil {
+			return "", err
+		}
+		// Ctrl-C would end the process with the terminal still hiding what's
+		// typed, so turn echo back on before going.
+		interrupted := make(chan os.Signal, 1)
+		signal.Notify(interrupted, os.Interrupt)
+		done := make(chan struct{})
+		defer func() { signal.Stop(interrupted); close(done) }()
+		go func() {
+			select {
+			case <-interrupted:
+				_ = term.Restore(fd, state)
+				fmt.Fprintln(options.errors)
+				os.Exit(130)
+			case <-done:
+			}
+		}()
 		fmt.Fprint(options.errors, "Paste your Flare personal access token: ")
-		value, err := term.ReadPassword(int(file.Fd()))
+		value, err := term.ReadPassword(fd)
 		fmt.Fprintln(options.errors)
 		return strings.TrimSpace(string(value)), err
 	}
