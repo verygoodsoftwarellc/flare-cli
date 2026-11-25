@@ -1,7 +1,6 @@
 package command
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,6 +19,7 @@ import (
 	"github.com/verygoodsoftwarellc/flare-cli/internal/auth"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/config"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/version"
+	"golang.org/x/term"
 )
 
 type rootOptions struct {
@@ -168,10 +168,7 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 			}
 			token, expires := "", ""
 			if withToken {
-				if isTerminal(options.input) {
-					fmt.Fprint(options.errors, "Paste your Flare personal access token and press Enter: ")
-				}
-				if token, err = readToken(options.input); err != nil {
+				if token, err = options.readToken(); err != nil {
 					return fmt.Errorf("read token from stdin: %w", err)
 				}
 				if !strings.HasPrefix(token, "flare_pat_") {
@@ -231,27 +228,18 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 	return command
 }
 
-// readToken returns the first non-blank line of input, so pressing Enter after
-// pasting a token into a terminal is enough; nothing has to close stdin.
-func readToken(input io.Reader) (string, error) {
-	scanner := bufio.NewScanner(io.LimitReader(input, 1024))
-	for scanner.Scan() {
-		if token := strings.TrimSpace(scanner.Text()); token != "" {
-			return token, nil
-		}
+// readToken reads a personal access token from stdin. Piped input is read to
+// the end. A terminal never ends it, so it gets a prompt and a one-line read
+// that, like a password prompt, doesn't show the token.
+func (options *rootOptions) readToken() (string, error) {
+	if file, ok := options.input.(*os.File); ok && term.IsTerminal(int(file.Fd())) {
+		fmt.Fprint(options.errors, "Paste your Flare personal access token: ")
+		value, err := term.ReadPassword(int(file.Fd()))
+		fmt.Fprintln(options.errors)
+		return strings.TrimSpace(string(value)), err
 	}
-	return "", scanner.Err()
-}
-
-// isTerminal reports whether input is a terminal (or another character
-// device), rather than a pipe or a file.
-func isTerminal(input io.Reader) bool {
-	file, ok := input.(*os.File)
-	if !ok {
-		return false
-	}
-	info, err := file.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	value, err := io.ReadAll(io.LimitReader(options.input, 1024))
+	return strings.TrimSpace(string(value)), err
 }
 
 // browserLogin signs in with PKCE through the browser and returns the new

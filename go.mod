@@ -6,6 +6,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/spf13/cobra v1.10.1
 	github.com/zalando/go-keyring v0.2.6
+	golang.org/x/term v0.47.0
 )
 
 require (
