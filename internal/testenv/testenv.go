@@ -1,5 +1,5 @@
 // Package testenv keeps test runs away from the developer's own Flare
-// credentials and config.
+// credentials and config, and the Claude Code config `setup` edits.
 package testenv
 
 import (
@@ -14,11 +14,11 @@ import (
 
 var clearedEnv = []string{"FLARE_TOKEN", "FLARE_API_URL"}
 
-// Run is for TestMain. It points the home and config directories at a
-// throwaway one, clears FLARE_TOKEN and FLARE_API_URL, and swaps the OS
-// credential store for an in-memory one before running the tests, so a test
-// that skips its own setup can't read, replace or delete a real token, or
-// send one to a real server.
+// Run is for TestMain. It points the home and config directories, Claude
+// Code's included, at a throwaway one, clears FLARE_TOKEN and FLARE_API_URL,
+// and swaps the OS credential store for an in-memory one before running the
+// tests, so a test that skips its own setup can't read, replace or delete a
+// real token or client config, or send a token to a real server.
 func Run(m *testing.M) int {
 	home, err := os.MkdirTemp("", "flare-cli-test-home-")
 	if err != nil {
@@ -26,7 +26,7 @@ func Run(m *testing.M) int {
 		return 1
 	}
 	defer os.RemoveAll(home)
-	for _, name := range []string{"HOME", "USERPROFILE", "XDG_CONFIG_HOME", "APPDATA"} {
+	for _, name := range []string{"HOME", "USERPROFILE", "XDG_CONFIG_HOME", "APPDATA", "CLAUDE_CONFIG_DIR"} {
 		os.Setenv(name, home)
 	}
 	for _, name := range clearedEnv {
@@ -44,8 +44,10 @@ func Check(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(directory, filepath.Clean(os.TempDir())) {
-		t.Fatalf("config directory %s is outside the temp directory", directory)
+	for _, directory := range []string{directory, os.Getenv("CLAUDE_CONFIG_DIR")} {
+		if !strings.HasPrefix(directory, filepath.Clean(os.TempDir())) {
+			t.Fatalf("config directory %q is outside the temp directory", directory)
+		}
 	}
 	for _, name := range clearedEnv {
 		if os.Getenv(name) != "" {
