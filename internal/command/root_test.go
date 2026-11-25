@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
@@ -515,6 +516,42 @@ func TestLoginWithTokenChecksTheTokenBeforeSavingIt(t *testing.T) {
 				t.Fatalf("saved %q (%v), want %q", saved, err, test.saved)
 			}
 		})
+	}
+}
+
+// A terminal never closes stdin, so the token ends at the Enter after it.
+func TestLoginWithTokenStopsAtTheFirstLine(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	keyring.MockInit()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	input, typing := io.Pipe()
+	defer typing.Close()
+	go func() { _, _ = typing.Write([]byte("\n  flare_pat_typed\r\n")) }()
+
+	output := &bytes.Buffer{}
+	options := &rootOptions{name: "flare-cli", apiURL: server.URL, output: output, errors: &bytes.Buffer{}, input: input}
+	command := newAuthCommand(options)
+	command.SetArgs([]string{"login", "--with-token"})
+	done := make(chan error, 1)
+	go func() { done <- command.Execute() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("login --with-token is still waiting for stdin to close after a full line")
+	}
+	settings, err := config.Load(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved, err := settings.TokenValue(); err != nil || saved != "flare_pat_typed" {
+		t.Fatalf("saved %q (%v)", saved, err)
 	}
 }
 

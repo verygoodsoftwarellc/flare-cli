@@ -1,6 +1,7 @@
 package command
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -167,11 +168,12 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 			}
 			token, expires := "", ""
 			if withToken {
-				value, err := io.ReadAll(io.LimitReader(options.input, 1024))
-				if err != nil {
+				if isTerminal(options.input) {
+					fmt.Fprint(options.errors, "Paste your Flare personal access token and press Enter: ")
+				}
+				if token, err = readToken(options.input); err != nil {
 					return fmt.Errorf("read token from stdin: %w", err)
 				}
-				token = strings.TrimSpace(string(value))
 				if !strings.HasPrefix(token, "flare_pat_") {
 					return errors.New("stdin did not contain a Flare personal access token")
 				}
@@ -227,6 +229,29 @@ func newAuthCommand(options *rootOptions) *cobra.Command {
 	}
 	command.AddCommand(login, status, logout)
 	return command
+}
+
+// readToken returns the first non-blank line of input, so pressing Enter after
+// pasting a token into a terminal is enough; nothing has to close stdin.
+func readToken(input io.Reader) (string, error) {
+	scanner := bufio.NewScanner(io.LimitReader(input, 1024))
+	for scanner.Scan() {
+		if token := strings.TrimSpace(scanner.Text()); token != "" {
+			return token, nil
+		}
+	}
+	return "", scanner.Err()
+}
+
+// isTerminal reports whether input is a terminal (or another character
+// device), rather than a pipe or a file.
+func isTerminal(input io.Reader) bool {
+	file, ok := input.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 // browserLogin signs in with PKCE through the browser and returns the new
