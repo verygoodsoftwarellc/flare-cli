@@ -120,7 +120,7 @@ func (options *rootOptions) tokenClient(apiURL, token string) *api.Client {
 		client.ScopeHint = "Replace FLARE_TOKEN with a token that has this scope."
 	} else {
 		client.AuthHint = fmt.Sprintf("Run %s to sign in again.", login)
-		client.ScopeHint = fmt.Sprintf("Run %s to get a token with every scope.", login)
+		client.ScopeHint = fmt.Sprintf("Run %s to get a new token, and tick this scope if it's offered as a box.", login)
 	}
 	return client
 }

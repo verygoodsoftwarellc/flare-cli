@@ -118,4 +118,4 @@ It has this shape:
 }
 ```
 
-It offers whatever the hosted server does, which is read-only. If your token is missing a scope a tool needs, the tool's error says so, and `auth login` fixes it.
+It offers whatever the hosted server does. Tools that change something are listed only when your token has their scope. Changing alert settings needs `alerts:write`, which `auth login` offers as an unticked box in the browser: run it again and tick the box to add it. If your token is missing a scope a tool needs, the tool's error says so.
