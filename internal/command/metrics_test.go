@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestSeriesTableShowsWindowStats(t *testing.T) {
@@ -114,6 +116,38 @@ func TestNamespaceTableShowsImpact(t *testing.T) {
 	for _, want := range []string{"IMPACT", "42.5%"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("missing %q in:\n%s", want, output)
+		}
+	}
+}
+
+func TestMetricsCommandsTakeTheEnvironmentInThePath(t *testing.T) {
+	t.Setenv("FLARE_TOKEN", "flare_pat_test")
+	var path, query string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		path, query = request.URL.Path, request.URL.RawQuery
+		_, _ = writer.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	for _, test := range []struct {
+		build func(*rootOptions) *cobra.Command
+		args  []string
+		path  string
+		query string
+	}{
+		{newNamespaceCommand, []string{"-e", "7", "-n", "web"}, "/api/v1/environments/7/namespaces/web/operations", "direction=desc&hours=24&limit=25&q=&sort=sum"},
+		{newNamespaceOverviewCommand, []string{"-e", "7", "-n", "job"}, "/api/v1/environments/7/namespaces/job", "hours=24&limit=10"},
+		{newSeriesCommand, []string{"-e", "7", "-n", "db", "--target", "users"}, "/api/v1/environments/7/namespaces/db/series", "hours=24&target=users"},
+		{newQueryCommand, []string{"-e", "7", "-n", "web", "--group-by", "target"}, "/api/v1/environments/7/metrics", "direction=desc&group_by=target&hours=24&limit=10&namespace=web&sort=sum"},
+		{newQueryCommand, []string{"-e", "7"}, "/api/v1/environments/7/metrics", "direction=desc&hours=24&limit=10&sort=sum"},
+	} {
+		command := test.build(&rootOptions{name: "flare-cli", apiURL: server.URL, json: true, output: &bytes.Buffer{}, errors: &bytes.Buffer{}})
+		command.SetArgs(test.args)
+		if err := command.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		if path != test.path || query != test.query {
+			t.Errorf("%v: got %s?%s, want %s?%s", test.args, path, query, test.path, test.query)
 		}
 	}
 }

@@ -76,15 +76,20 @@ func (s scope) validate(namespaceRequired bool) error {
 	return nil
 }
 
+// values are the query parameters every metrics endpoint takes. The
+// environment, and the namespace for one namespace's endpoints, go in the path.
 func (s scope) values() url.Values {
-	query := url.Values{
-		"environment_id": {strconv.FormatInt(s.EnvironmentID, 10)},
-		"hours":          {strconv.Itoa(s.Hours)},
-	}
-	if s.Namespace != "" {
-		query.Set("namespace", s.Namespace)
-	}
-	return query
+	return url.Values{"hours": {strconv.Itoa(s.Hours)}}
+}
+
+// environmentPath is an endpoint under the scope's environment.
+func (s scope) environmentPath(endpoint string) string {
+	return "/api/v1/environments/" + strconv.FormatInt(s.EnvironmentID, 10) + endpoint
+}
+
+// namespacePath is an endpoint under the scope's namespace.
+func (s scope) namespacePath(endpoint string) string {
+	return s.environmentPath("/namespaces/" + url.PathEscape(s.Namespace) + endpoint)
 }
 
 // selector narrows to one operation by exact service / target / operation.
@@ -369,7 +374,7 @@ func newNamespaceCommand(options *rootOptions) *cobra.Command {
 				query.Set("cursor", cursor)
 			}
 			var response api.NamespaceResponse
-			if err := client.Get(command.Context(), "/api/v1/namespaces", query, &response); err != nil {
+			if err := client.Get(command.Context(), scope.namespacePath("/operations"), query, &response); err != nil {
 				return err
 			}
 			if options.json {
@@ -410,7 +415,7 @@ func newNamespaceOverviewCommand(options *rootOptions) *cobra.Command {
 			query := scope.values()
 			query.Set("limit", strconv.Itoa(limit))
 			var response api.NamespaceOverviewResponse
-			if err := client.Get(command.Context(), "/api/v1/namespaces/overview", query, &response); err != nil {
+			if err := client.Get(command.Context(), scope.namespacePath(""), query, &response); err != nil {
 				return err
 			}
 			if options.json {
@@ -451,7 +456,7 @@ func newSeriesCommand(options *rootOptions) *cobra.Command {
 			query := scope.values()
 			selector.apply(query)
 			var response api.OperationSeriesResponse
-			if err := client.Get(command.Context(), "/api/v1/series", query, &response); err != nil {
+			if err := client.Get(command.Context(), scope.namespacePath("/series"), query, &response); err != nil {
 				return err
 			}
 			if options.json {
@@ -497,6 +502,9 @@ func newQueryCommand(options *rootOptions) *cobra.Command {
 				return err
 			}
 			query := scope.values()
+			if scope.Namespace != "" {
+				query.Set("namespace", scope.Namespace)
+			}
 			selector.apply(query)
 			query.Set("sort", sort)
 			query.Set("direction", direction)
@@ -511,7 +519,7 @@ func newQueryCommand(options *rootOptions) *cobra.Command {
 				query.Set("min_count", strconv.Itoa(minCount))
 			}
 			var response api.QueryResponse
-			if err := client.Get(command.Context(), "/api/v1/metrics/query", query, &response); err != nil {
+			if err := client.Get(command.Context(), scope.environmentPath("/metrics"), query, &response); err != nil {
 				return err
 			}
 			if options.json {
