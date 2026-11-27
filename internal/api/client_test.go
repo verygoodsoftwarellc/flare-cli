@@ -98,9 +98,9 @@ func TestGetAddsScopeHintToForbiddenErrors(t *testing.T) {
 
 	client := New(server.URL, "flare_pat_old")
 	client.AuthHint = "Run `flare-cli auth login` to sign in again."
-	client.ScopeHint = "Run `flare-cli auth login` to get a token with every scope."
+	client.ScopeHint = "Run `flare-cli auth login` to get a new token, and tick this scope if it's offered as a box."
 	err := client.Get(context.Background(), "/api/v1/traces", nil, &map[string]any{})
-	if err == nil || err.Error() != "This token requires the traces:read scope. Run `flare-cli auth login` to get a token with every scope. (request abc)" {
+	if err == nil || err.Error() != "This token requires the traces:read scope. Run `flare-cli auth login` to get a new token, and tick this scope if it's offered as a box. (request abc)" {
 		t.Fatalf("unexpected forbidden error %v", err)
 	}
 }

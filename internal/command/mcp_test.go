@@ -89,7 +89,7 @@ func newFakeFlare(t *testing.T, jsonResponse bool) *fakeFlare {
 func testMCPProxy(baseURL, token string) *mcpProxy {
 	client := api.New(baseURL, token)
 	client.AuthHint = "Run `flare-cli auth login` to sign in again."
-	client.ScopeHint = "Run `flare-cli auth login` to get a token with every scope."
+	client.ScopeHint = "Run `flare-cli auth login` to get a new token, and tick this scope if it's offered as a box."
 	return newMCPProxy(client)
 }
 
@@ -220,7 +220,7 @@ func TestMCPProxyAnswersAMissingScopeWithTheScopeHint(t *testing.T) {
 
 	replies, _ := runMCPProxy(t, testMCPProxy(remote.URL, "flare_pat_old"), toolsListMessage)
 	rpcError, _ := replies["2"]["error"].(map[string]any)
-	if !strings.HasSuffix(rpcError["message"].(string), "Run `flare-cli auth login` to get a token with every scope.") {
+	if !strings.HasSuffix(rpcError["message"].(string), "Run `flare-cli auth login` to get a new token, and tick this scope if it's offered as a box.") {
 		t.Fatalf("error = %v", replies["2"])
 	}
 }
