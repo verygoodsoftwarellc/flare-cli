@@ -355,9 +355,6 @@ func TestMCPConfigPrintsResolvedAbsolutePath(t *testing.T) {
 
 func testMCPInstaller(t *testing.T, output *bytes.Buffer, run func(context.Context, string, ...string) (string, error)) *mcpInstaller {
 	t.Helper()
-	if _, set := os.LookupEnv("CLAUDE_CONFIG_DIR"); !set {
-		t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
-	}
 	return &mcpInstaller{
 		executable: "/usr/local/bin/flare-cli",
 		output:     output,
