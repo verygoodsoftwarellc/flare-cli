@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestSeriesTableShowsWindowStats(t *testing.T) {
@@ -115,5 +118,44 @@ func TestNamespaceTableShowsImpact(t *testing.T) {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("missing %q in:\n%s", want, output)
 		}
+	}
+}
+
+func TestMetricsCommandsTakeTheEnvironmentInThePath(t *testing.T) {
+	t.Setenv("FLARE_TOKEN", "flare_pat_test")
+	var path string
+	var query url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		path, query = request.URL.Path, request.URL.Query()
+		_, _ = writer.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	for _, test := range []struct {
+		build     func(*rootOptions) *cobra.Command
+		args      []string
+		path      string
+		namespace string
+	}{
+		{newNamespaceCommand, []string{"-e", "7", "-n", "web"}, "/api/v1/environments/7/namespaces/web/operations", ""},
+		{newNamespaceOverviewCommand, []string{"-e", "7", "-n", "job"}, "/api/v1/environments/7/namespaces/job", ""},
+		{newSeriesCommand, []string{"-e", "7", "-n", "db", "--target", "users"}, "/api/v1/environments/7/namespaces/db/series", ""},
+		{newQueryCommand, []string{"-e", "7", "-n", "web"}, "/api/v1/environments/7/metrics", "web"},
+		{newQueryCommand, []string{"-e", "7"}, "/api/v1/environments/7/metrics", ""},
+	} {
+		command := test.build(&rootOptions{name: "flare-cli", apiURL: server.URL, json: true, output: &bytes.Buffer{}, errors: &bytes.Buffer{}})
+		command.SetArgs(test.args)
+		if err := command.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		if path != test.path {
+			t.Errorf("%v: path %s, want %s", test.args, path, test.path)
+		}
+		if query.Has("environment_id") || query.Get("namespace") != test.namespace {
+			t.Errorf("%v: query %s, want no environment_id and namespace %q", test.args, query.Encode(), test.namespace)
+		}
+	}
+	if query.Get("hours") != "24" {
+		t.Errorf("hours = %q, want 24", query.Get("hours"))
 	}
 }
