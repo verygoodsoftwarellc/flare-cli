@@ -128,8 +128,8 @@ type QueryGroup struct {
 	Series *Series `json:"series,omitempty"`
 }
 
-// QueryResponse is the generic GET /api/v1/environments/:environment_id/metrics result. Buckets is
-// present only when series were requested.
+// QueryResponse is the generic GET /api/v1/environments/:environment_id/metrics
+// result. Buckets is present only when series were requested.
 type QueryResponse struct {
 	Environment Environment `json:"environment"`
 	Window

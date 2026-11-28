@@ -76,8 +76,8 @@ func (s scope) validate(namespaceRequired bool) error {
 	return nil
 }
 
-// values are the query parameters every metrics endpoint takes. The
-// environment, and the namespace for one namespace's endpoints, go in the path.
+// values are the scope's query parameters. The environment, and the namespace
+// on one namespace's endpoints, go in the path.
 func (s scope) values() url.Values {
 	return url.Values{"hours": {strconv.Itoa(s.Hours)}}
 }

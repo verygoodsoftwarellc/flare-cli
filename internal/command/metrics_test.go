@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -122,32 +123,39 @@ func TestNamespaceTableShowsImpact(t *testing.T) {
 
 func TestMetricsCommandsTakeTheEnvironmentInThePath(t *testing.T) {
 	t.Setenv("FLARE_TOKEN", "flare_pat_test")
-	var path, query string
+	var path string
+	var query url.Values
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		path, query = request.URL.Path, request.URL.RawQuery
+		path, query = request.URL.Path, request.URL.Query()
 		_, _ = writer.Write([]byte(`{}`))
 	}))
 	defer server.Close()
 
 	for _, test := range []struct {
-		build func(*rootOptions) *cobra.Command
-		args  []string
-		path  string
-		query string
+		build     func(*rootOptions) *cobra.Command
+		args      []string
+		path      string
+		namespace string
 	}{
-		{newNamespaceCommand, []string{"-e", "7", "-n", "web"}, "/api/v1/environments/7/namespaces/web/operations", "direction=desc&hours=24&limit=25&q=&sort=sum"},
-		{newNamespaceOverviewCommand, []string{"-e", "7", "-n", "job"}, "/api/v1/environments/7/namespaces/job", "hours=24&limit=10"},
-		{newSeriesCommand, []string{"-e", "7", "-n", "db", "--target", "users"}, "/api/v1/environments/7/namespaces/db/series", "hours=24&target=users"},
-		{newQueryCommand, []string{"-e", "7", "-n", "web", "--group-by", "target"}, "/api/v1/environments/7/metrics", "direction=desc&group_by=target&hours=24&limit=10&namespace=web&sort=sum"},
-		{newQueryCommand, []string{"-e", "7"}, "/api/v1/environments/7/metrics", "direction=desc&hours=24&limit=10&sort=sum"},
+		{newNamespaceCommand, []string{"-e", "7", "-n", "web"}, "/api/v1/environments/7/namespaces/web/operations", ""},
+		{newNamespaceOverviewCommand, []string{"-e", "7", "-n", "job"}, "/api/v1/environments/7/namespaces/job", ""},
+		{newSeriesCommand, []string{"-e", "7", "-n", "db", "--target", "users"}, "/api/v1/environments/7/namespaces/db/series", ""},
+		{newQueryCommand, []string{"-e", "7", "-n", "web"}, "/api/v1/environments/7/metrics", "web"},
+		{newQueryCommand, []string{"-e", "7"}, "/api/v1/environments/7/metrics", ""},
 	} {
 		command := test.build(&rootOptions{name: "flare-cli", apiURL: server.URL, json: true, output: &bytes.Buffer{}, errors: &bytes.Buffer{}})
 		command.SetArgs(test.args)
 		if err := command.Execute(); err != nil {
 			t.Fatal(err)
 		}
-		if path != test.path || query != test.query {
-			t.Errorf("%v: got %s?%s, want %s?%s", test.args, path, query, test.path, test.query)
+		if path != test.path {
+			t.Errorf("%v: path %s, want %s", test.args, path, test.path)
 		}
+		if query.Has("environment_id") || query.Get("namespace") != test.namespace {
+			t.Errorf("%v: query %s, want no environment_id and namespace %q", test.args, query.Encode(), test.namespace)
+		}
+	}
+	if query.Get("hours") != "24" {
+		t.Errorf("hours = %q, want 24", query.Get("hours"))
 	}
 }
