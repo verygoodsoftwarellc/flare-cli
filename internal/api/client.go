@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -110,10 +109,4 @@ func (client *Client) Get(ctx context.Context, path string, query url.Values, ou
 		return fmt.Errorf("decode Flare response: %w", err)
 	}
 	return nil
-}
-
-func AddInt(query url.Values, key string, value int64) {
-	if value != 0 {
-		query.Set(key, strconv.FormatInt(value, 10))
-	}
 }
