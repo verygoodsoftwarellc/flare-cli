@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/api"
 	"github.com/verygoodsoftwarellc/flare-cli/internal/config"
@@ -453,25 +452,17 @@ func hideToken(text, token string) string {
 // verifyRemoteMCP connects to the hosted server the way a client does, with
 // initialize and tools/list, and returns how many tools it offers.
 func verifyRemoteMCP(ctx context.Context, endpoint, token string) (int, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	transport := &mcp.StreamableClientTransport{
-		Endpoint:             endpoint,
-		HTTPClient:           remoteHTTPClient(token),
-		MaxRetries:           -1,
-		DisableStandaloneSSE: true,
+	hosted := newHostedMCPAt(endpoint, token)
+	hosted.timeout = 30 * time.Second
+	defer hosted.endSession()
+	if err := hosted.initialize(ctx); err != nil {
+		return 0, err
 	}
-	client := mcp.NewClient(&mcp.Implementation{Name: "flare-cli", Version: version.Current()}, nil)
-	session, err := client.Connect(ctx, transport, nil)
+	tools, err := hosted.listTools(ctx)
 	if err != nil {
 		return 0, err
 	}
-	defer session.Close()
-	tools, err := session.ListTools(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	return len(tools.Tools), nil
+	return len(tools), nil
 }
 
 // remoteHTTPClient talks to Flare's hosted MCP server with the token. It

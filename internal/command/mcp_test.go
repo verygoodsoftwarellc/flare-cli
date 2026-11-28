@@ -277,7 +277,7 @@ func TestMCPProxyGivesUpOnAStalledRequest(t *testing.T) {
 	defer close(release)
 
 	proxy := testMCPProxy(remote.URL, "flare_pat_good")
-	proxy.timeout = 100 * time.Millisecond
+	proxy.hosted.timeout = 100 * time.Millisecond
 	replies, _ := runMCPProxy(t, proxy, toolsListMessage, `{"jsonrpc":"2.0","id":4,"method":"ping"}`)
 	if replies["2"]["error"].(map[string]any)["message"] != "Flare didn't answer within 100ms" {
 		t.Fatalf("reply = %v", replies["2"])
