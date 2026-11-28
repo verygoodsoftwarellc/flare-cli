@@ -53,6 +53,8 @@ func newRootCommand(name string) *cobra.Command {
 		newProjectCommand(options),
 		newEnvironmentCommand(options),
 		newMetricsCommand(options),
+		newToolsCommand(options),
+		newCallCommand(options),
 		newMCPCommand(options),
 		newSetupCommand(options),
 	)
@@ -366,6 +368,7 @@ func newEnvironmentCommand(options *rootOptions) *cobra.Command {
 
 func writeJSON(writer io.Writer, value any) error {
 	encoder := json.NewEncoder(writer)
+	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(value)
 }
