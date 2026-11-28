@@ -452,6 +452,8 @@ func hideToken(text, token string) string {
 // verifyRemoteMCP connects to the hosted server the way a client does, with
 // initialize and tools/list, and returns how many tools it offers.
 func verifyRemoteMCP(ctx context.Context, endpoint, token string) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	hosted := newHostedMCPAt(endpoint, token)
 	hosted.timeout = 30 * time.Second
 	defer hosted.endSession()

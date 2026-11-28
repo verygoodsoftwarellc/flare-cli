@@ -8,11 +8,21 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf16"
 
 	"github.com/spf13/cobra"
 )
 
-// hostedTool is what `tools` shows of one entry in tools/list.
+// toolName is the part of a tools/list entry the table and lookup need,
+// decoded apart from the schema so a schema this CLI doesn't understand
+// can't hide a tool.
+type toolName struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// hostedTool is what `tools <name>` shows of one entry in tools/list.
 type hostedTool struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
@@ -60,14 +70,20 @@ func newToolsCommand(options *rootOptions) *cobra.Command {
 				return writeToolTable(options.output, tools)
 			}
 			for _, raw := range tools {
-				var tool hostedTool
-				if json.Unmarshal(raw, &tool) != nil || tool.Name != args[0] {
+				var named toolName
+				if json.Unmarshal(raw, &named) != nil || named.Name != args[0] {
 					continue
 				}
 				if options.json {
 					return writeJSON(options.output, raw)
 				}
-				return writeToolHelp(options.output, options.name, tool)
+				var tool hostedTool
+				if json.Unmarshal(raw, &tool) != nil {
+					// Still show what can be shown; --json has the schema.
+					tool = hostedTool{Name: named.Name, Description: named.Description}
+					return writeToolHelp(options.output, options.name, tool, true)
+				}
+				return writeToolHelp(options.output, options.name, tool, false)
 			}
 			return fmt.Errorf("Flare has no tool named %q for this token; run `%s tools` to list them", args[0], options.name)
 		},
@@ -175,7 +191,7 @@ func toolText(result toolResult) string {
 		piece := withoutControls(content.Text)
 		var indented bytes.Buffer
 		if json.Indent(&indented, []byte(content.Text), "", "  ") == nil {
-			piece = indented.String()
+			piece = escapeInvisible(indented.String())
 		}
 		text.WriteString(piece)
 		if !strings.HasSuffix(piece, "\n") {
@@ -188,7 +204,7 @@ func toolText(result toolResult) string {
 func writeToolTable(output io.Writer, tools []json.RawMessage) error {
 	rows := make([][]string, 0, len(tools))
 	for _, raw := range tools {
-		var tool hostedTool
+		var tool toolName
 		if json.Unmarshal(raw, &tool) != nil {
 			continue
 		}
@@ -219,11 +235,17 @@ func summary(description string) string {
 	return line
 }
 
-func writeToolHelp(output io.Writer, name string, tool hostedTool) error {
+// writeToolHelp shows a tool's description and arguments. unreadable is true
+// when its input schema didn't decode, so only --json can show the arguments.
+func writeToolHelp(output io.Writer, name string, tool hostedTool, unreadable bool) error {
 	fmt.Fprintln(output, printable(tool.Name))
 	fmt.Fprintln(output)
 	for _, line := range strings.Split(strings.TrimSpace(tool.Description), "\n") {
 		fmt.Fprintln(output, printable(line))
+	}
+	if unreadable {
+		_, err := fmt.Fprintf(output, "\nRun `%s tools %s --json` to see its arguments.\n", name, printable(tool.Name))
+		return err
 	}
 	properties := tool.InputSchema.Properties
 	if len(properties) == 0 {
@@ -333,6 +355,26 @@ func numberRange(minimum, maximum *json.Number) string {
 		return "at least " + minimum.String()
 	}
 	return "at most " + maximum.String()
+}
+
+// escapeInvisible writes characters printable would drop as \u escapes, for
+// indented JSON: they can only sit inside its strings, where the escape keeps
+// the value exact without letting it reorder or hide what the terminal shows.
+func escapeInvisible(text string) string {
+	var escaped strings.Builder
+	for _, char := range text {
+		if unicode.IsGraphic(char) || char == '\n' || char == '\t' {
+			escaped.WriteRune(char)
+			continue
+		}
+		if char > 0xFFFF {
+			high, low := utf16.EncodeRune(char)
+			fmt.Fprintf(&escaped, "\\u%04x\\u%04x", high, low)
+			continue
+		}
+		fmt.Fprintf(&escaped, "\\u%04x", char)
+	}
+	return escaped.String()
 }
 
 // schemaValue shows a string without its quotes and anything else as JSON.

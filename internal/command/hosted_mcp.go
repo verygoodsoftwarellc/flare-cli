@@ -42,7 +42,11 @@ type hostedMCP struct {
 	authHint   string
 	scopeHint  string
 	timeout    time.Duration
-	lastID     atomic.Int64
+	// verbose prints each response's rate limit and request id to errWriter,
+	// as --verbose does for the API.
+	verbose   bool
+	errWriter io.Writer
+	lastID    atomic.Int64
 
 	mutex           sync.Mutex
 	sessionID       string
@@ -95,6 +99,8 @@ func newHostedMCP(client *api.Client) *hostedMCP {
 	hosted := newHostedMCPAt(client.BaseURL+"/mcp", client.Token)
 	hosted.authHint = client.AuthHint
 	hosted.scopeHint = client.ScopeHint
+	hosted.verbose = client.Verbose
+	hosted.errWriter = client.ErrWriter
 	return hosted
 }
 
@@ -266,6 +272,9 @@ func (hosted *hostedMCP) send(ctx context.Context, message []byte, receive func(
 		return fmt.Errorf("request Flare: %w", err)
 	}
 	defer response.Body.Close()
+	if hosted.verbose && hosted.errWriter != nil {
+		fmt.Fprintf(hosted.errWriter, "rate-limit: %s policy=%s request=%s\n", response.Header.Get("RateLimit"), response.Header.Get("RateLimit-Policy"), response.Header.Get("X-Request-ID"))
+	}
 	if sessionID := response.Header.Get("Mcp-Session-Id"); sessionID != "" {
 		hosted.mutex.Lock()
 		hosted.sessionID = sessionID

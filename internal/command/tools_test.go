@@ -336,3 +336,47 @@ func TestToolsAndCallExplainARejectedToken(t *testing.T) {
 		t.Fatalf("authorizations = %q", fake.authorizations)
 	}
 }
+
+func TestToolTextEscapesInvisibleCharactersInJSON(t *testing.T) {
+	result := toolResult{Content: []json.RawMessage{json.RawMessage(`{"type":"text","text":"{\"name\":\"evil` + "\u202e" + `exe.txt\",\"emoji\":\"🔥\"}"}`)}}
+	output := toolText(result)
+	if strings.ContainsRune(output, '\u202e') || !strings.Contains(output, `"name": "evil\u202eexe.txt"`) || !strings.Contains(output, "🔥") {
+		t.Fatalf("want the direction override escaped and visible characters kept:\n%q", output)
+	}
+	var decoded map[string]string
+	if err := json.Unmarshal([]byte(output), &decoded); err != nil || decoded["name"] != "evil\u202eexe.txt" {
+		t.Fatalf("escaped JSON should decode to the same value: %v %q", err, decoded["name"])
+	}
+}
+
+func TestToolsKeepsAToolWhoseSchemaDoesNotDecode(t *testing.T) {
+	odd := json.RawMessage(`{"name":"odd_tool","description":"Has a boolean items schema.","inputSchema":{"type":"object","properties":{"ids":{"type":"array","items":false}}}}`)
+	var table bytes.Buffer
+	if err := writeToolTable(&table, []json.RawMessage{odd}); err != nil || !strings.Contains(table.String(), "odd_tool") {
+		t.Fatalf("want the tool listed even when its schema doesn't decode: %v\n%s", err, table.String())
+	}
+	var help bytes.Buffer
+	if err := writeToolHelp(&help, "flare-cli", hostedTool{Name: "odd_tool", Description: "Has a boolean items schema."}, true); err != nil ||
+		!strings.Contains(help.String(), "Run `flare-cli tools odd_tool --json` to see its arguments.") {
+		t.Fatalf("want a pointer to --json for an unreadable schema: %v\n%s", err, help.String())
+	}
+}
+
+func TestHostedMCPPrintsRateLimitsWhenVerbose(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("RateLimit", "limit=600, remaining=599, reset=60")
+		writer.Header().Set("X-Request-ID", "req-1")
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}`))
+	}))
+	defer server.Close()
+	var verbose bytes.Buffer
+	hosted := newHostedMCPAt(server.URL, "flare_pat_good")
+	hosted.verbose, hosted.errWriter = true, &verbose
+	if _, err := hosted.listTools(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(verbose.String(), "rate-limit: limit=600, remaining=599, reset=60 policy= request=req-1\n") {
+		t.Fatalf("want the rate limit and request id: %q", verbose.String())
+	}
+}
