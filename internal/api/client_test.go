@@ -23,7 +23,11 @@ func TestGetAuthenticatesAndDecodes(t *testing.T) {
 	defer server.Close()
 
 	client := New(server.URL, "flare_pat_test")
-	var response OrganizationsResponse
+	var response struct {
+		Organizations []struct {
+			Name string `json:"name"`
+		} `json:"organizations"`
+	}
 	if err := client.Get(context.Background(), "/api/v1/organizations", url.Values{"limit": {"10"}}, &response); err != nil {
 		t.Fatal(err)
 	}

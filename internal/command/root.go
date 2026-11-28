@@ -49,10 +49,8 @@ func newRootCommand(name string) *cobra.Command {
 	command.PersistentFlags().BoolVar(&options.verbose, "verbose", false, "print request metadata")
 	command.AddCommand(
 		newAuthCommand(options),
-		newOrganizationCommand(options),
-		newProjectCommand(options),
-		newEnvironmentCommand(options),
-		newMetricsCommand(options),
+		newToolsCommand(options),
+		newCallCommand(options),
 		newMCPCommand(options),
 		newSetupCommand(options),
 	)
@@ -62,8 +60,8 @@ func newRootCommand(name string) *cobra.Command {
 }
 
 // rejectStrayArgs turns typos and leftover arguments under subcommands into
-// errors. Cobra only checks them at the root: below it, `metrics oveview`
-// prints help and exits 0, and `project list 123` ignores the 123. Cobra adds
+// errors. Cobra only checks them at the root: below it, `auth statsu` prints
+// help and exits 0, and `auth logout extra` ignores the extra. Cobra adds
 // its help command later, which keeps that command's arguments working.
 func rejectStrayArgs(parent *cobra.Command) {
 	for _, command := range parent.Commands() {
@@ -264,7 +262,7 @@ func expiryNote(expiresAt string) string {
 }
 
 func verifyAuthentication(ctx context.Context, client *api.Client) error {
-	var response api.OrganizationsResponse
+	var response struct{}
 	err := client.Get(ctx, "/api/v1/organizations", url.Values{"limit": {"1"}}, &response)
 	var apiError *api.APIError
 	if errors.As(err, &apiError) && apiError.Status == http.StatusForbidden {
@@ -273,99 +271,9 @@ func verifyAuthentication(ctx context.Context, client *api.Client) error {
 	return err
 }
 
-func newOrganizationCommand(options *rootOptions) *cobra.Command {
-	parent := &cobra.Command{Use: "org", Short: "Work with organizations"}
-	parent.AddCommand(&cobra.Command{
-		Use:   "list",
-		Short: "List accessible organizations",
-		RunE: func(command *cobra.Command, _ []string) error {
-			client, err := options.client()
-			if err != nil {
-				return err
-			}
-			response, err := allOrganizations(command.Context(), client)
-			if err != nil {
-				return err
-			}
-			if options.json {
-				return writeJSON(options.output, response)
-			}
-			return writeTable(options.output, []string{"ID", "NAME"}, organizationRows(response.Organizations))
-		},
-	})
-	return parent
-}
-
-func newProjectCommand(options *rootOptions) *cobra.Command {
-	var organizationID int64
-	parent := &cobra.Command{Use: "project", Short: "Work with projects"}
-	list := &cobra.Command{
-		Use:   "list",
-		Short: "List accessible projects",
-		RunE: func(command *cobra.Command, _ []string) error {
-			client, err := options.client()
-			if err != nil {
-				return err
-			}
-			query := url.Values{"limit": {"100"}}
-			api.AddInt(query, "organization_id", organizationID)
-			response, err := allProjects(command.Context(), client, query)
-			if err != nil {
-				return err
-			}
-			if options.json {
-				return writeJSON(options.output, response)
-			}
-			organizations, err := allOrganizations(command.Context(), client)
-			if err != nil {
-				return err
-			}
-			return writeTable(options.output, []string{"ID", "NAME", "ORGANIZATION"}, projectRows(response.Projects, organizations.Organizations))
-		},
-	}
-	list.Flags().Int64Var(&organizationID, "org", 0, "filter by organization ID")
-	parent.AddCommand(list)
-	return parent
-}
-
-func newEnvironmentCommand(options *rootOptions) *cobra.Command {
-	var projectID int64
-	parent := &cobra.Command{Use: "environment", Aliases: []string{"env"}, Short: "Work with environments"}
-	list := &cobra.Command{
-		Use:   "list",
-		Short: "List accessible environments",
-		RunE: func(command *cobra.Command, _ []string) error {
-			client, err := options.client()
-			if err != nil {
-				return err
-			}
-			query := url.Values{"limit": {"100"}}
-			api.AddInt(query, "project_id", projectID)
-			response, err := allEnvironments(command.Context(), client, query)
-			if err != nil {
-				return err
-			}
-			if options.json {
-				return writeJSON(options.output, response)
-			}
-			projects, err := allProjects(command.Context(), client, url.Values{"limit": {"100"}})
-			if err != nil {
-				return err
-			}
-			organizations, err := allOrganizations(command.Context(), client)
-			if err != nil {
-				return err
-			}
-			return writeTable(options.output, []string{"ID", "NAME", "PROJECT", "ORGANIZATION"}, environmentRows(response.Environments, projects.Projects, organizations.Organizations))
-		},
-	}
-	list.Flags().Int64Var(&projectID, "project", 0, "filter by project ID")
-	parent.AddCommand(list)
-	return parent
-}
-
 func writeJSON(writer io.Writer, value any) error {
 	encoder := json.NewEncoder(writer)
+	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(value)
 }
@@ -401,140 +309,14 @@ func printable(text string) string {
 	}, text)
 }
 
-func organizationRows(organizations []api.Organization) [][]string {
-	rows := make([][]string, 0, len(organizations))
-	for _, organization := range organizations {
-		rows = append(rows, []string{fmt.Sprint(organization.ID), organization.Name})
-	}
-	return rows
-}
-
-func projectRows(projects []api.Project, organizations []api.Organization) [][]string {
-	organizationNames := make(map[int64]string, len(organizations))
-	for _, organization := range organizations {
-		organizationNames[organization.ID] = organization.Name
-	}
-
-	rows := make([][]string, 0, len(projects))
-	for _, project := range projects {
-		organizationName := nameOrID(organizationNames[project.OrganizationID], project.OrganizationID)
-		rows = append(rows, []string{fmt.Sprint(project.ID), project.Name, organizationName})
-	}
-	return rows
-}
-
-func environmentRows(environments []api.Environment, projects []api.Project, organizations []api.Organization) [][]string {
-	organizationNames := make(map[int64]string, len(organizations))
-	for _, organization := range organizations {
-		organizationNames[organization.ID] = organization.Name
-	}
-	projectsByID := make(map[int64]api.Project, len(projects))
-	for _, project := range projects {
-		projectsByID[project.ID] = project
-	}
-
-	rows := make([][]string, 0, len(environments))
-	for _, environment := range environments {
-		project, found := projectsByID[environment.ProjectID]
-		projectName := nameOrID(project.Name, environment.ProjectID)
-		organizationName := "-"
-		if found {
-			organizationName = nameOrID(organizationNames[project.OrganizationID], project.OrganizationID)
+// withoutControls is printable for multi-line text: it keeps newlines and
+// tabs, so text from the server can't send escape sequences or invisible
+// formatting to the terminal but keeps its lines.
+func withoutControls(text string) string {
+	return strings.Map(func(char rune) rune {
+		if !unicode.IsGraphic(char) && char != '\n' && char != '\t' {
+			return -1
 		}
-		rows = append(rows, []string{fmt.Sprint(environment.ID), environment.Name, projectName, organizationName})
-	}
-	return rows
-}
-
-func nameOrID(name string, id int64) string {
-	if name != "" {
-		return name
-	}
-	return fmt.Sprint(id)
-}
-
-func allOrganizations(ctx context.Context, client *api.Client) (api.OrganizationsResponse, error) {
-	response := api.OrganizationsResponse{Organizations: []api.Organization{}}
-	query := url.Values{"limit": {"100"}}
-	seen := map[string]bool{query.Get("cursor"): true}
-	for {
-		var page api.OrganizationsResponse
-		if err := client.Get(ctx, "/api/v1/organizations", query, &page); err != nil {
-			return response, err
-		}
-		response.Organizations = append(response.Organizations, page.Organizations...)
-		if page.Pagination.Next == nil {
-			break
-		}
-		if err := advanceCatalogCursor(query, *page.Pagination.Next, seen); err != nil {
-			return response, err
-		}
-	}
-	return response, nil
-}
-
-func allProjects(ctx context.Context, client *api.Client, query url.Values) (api.ProjectsResponse, error) {
-	response := api.ProjectsResponse{Projects: []api.Project{}}
-	seen := map[string]bool{query.Get("cursor"): true}
-	for {
-		var page api.ProjectsResponse
-		if err := client.Get(ctx, "/api/v1/projects", query, &page); err != nil {
-			return response, err
-		}
-		response.Projects = append(response.Projects, page.Projects...)
-		if page.Pagination.Next == nil {
-			break
-		}
-		if err := advanceCatalogCursor(query, *page.Pagination.Next, seen); err != nil {
-			return response, err
-		}
-	}
-	return response, nil
-}
-
-func allEnvironments(ctx context.Context, client *api.Client, query url.Values) (api.EnvironmentsResponse, error) {
-	response := api.EnvironmentsResponse{Environments: []api.Environment{}}
-	seen := map[string]bool{query.Get("cursor"): true}
-	for {
-		var page api.EnvironmentsResponse
-		if err := client.Get(ctx, "/api/v1/environments", query, &page); err != nil {
-			return response, err
-		}
-		response.Environments = append(response.Environments, page.Environments...)
-		if page.Pagination.Next == nil {
-			break
-		}
-		if err := advanceCatalogCursor(query, *page.Pagination.Next, seen); err != nil {
-			return response, err
-		}
-	}
-	return response, nil
-}
-
-func advanceCatalogCursor(query url.Values, next string, seen map[string]bool) error {
-	if seen[next] {
-		return errors.New("pagination cursor repeated")
-	}
-	seen[next] = true
-	query.Set("cursor", next)
-	return nil
-}
-
-// formatMilliseconds and formatSum match how the Flare web pages show an
-// average and a total.
-func formatMilliseconds(milliseconds float64) string {
-	if milliseconds < 1_000 {
-		return fmt.Sprintf("%.0fms", milliseconds)
-	}
-	return fmt.Sprintf("%.1fs", milliseconds/1_000)
-}
-
-func formatSum(milliseconds int64) string {
-	switch {
-	case milliseconds < 60_000:
-		return formatMilliseconds(float64(milliseconds))
-	case milliseconds < 3_600_000:
-		return fmt.Sprintf("%.1fm", float64(milliseconds)/60_000)
-	}
-	return fmt.Sprintf("%.1fh", float64(milliseconds)/3_600_000)
+		return char
+	}, text)
 }

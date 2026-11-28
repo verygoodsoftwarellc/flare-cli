@@ -40,26 +40,34 @@ The CLI opens Flare in your browser (and prints the URL in case it can't), uses 
 For automation, set `FLARE_TOKEN`. To use a self-hosted or development server, set `FLARE_API_URL`.
 To import an existing token without placing it in shell history or process arguments, pipe it to `flare-cli auth login --with-token`, which checks it with Flare before saving it.
 
-## Daily performance check
+## Tools
+
+The CLI runs the tools on Flare's hosted MCP server, the same ones your AI clients see. It offers whatever tools the server has for your token, so a new tool works here without a new CLI release.
 
 ```sh
-flare-cli org list
-flare-cli project list --org 123
-flare-cli environment list --project 456
-flare-cli metrics overview --environment 789 --hours 24
-flare-cli metrics namespace --environment 789 --namespace web --sort sum
-flare-cli metrics namespace-overview --environment 789 --namespace job --hours 1
-flare-cli metrics series --environment 789 --namespace job --target EventJob --hours 1
-flare-cli metrics query --environment 789 --namespace web --target UsersController#index --group-by operation --sort count
+flare-cli tools
+flare-cli tools query_metrics
 ```
 
-The metrics commands mirror the Flare web pages. `overview` is the environment page (per-namespace stats, top operations, and the deploys in the window). `namespace-overview` is the namespace page: stats, a time series, and the top operations by sum and by count, each with its own series. `namespace` is the paginated operations table; when there are more rows it prints the `--cursor` to pass for the next page. `series` is the operation page: stats and one row per bucket for one operation, selected with `--service`, `--target`, and `--operation` from the `selector` values in `namespace --json`.
+`tools` lists each tool with the first sentence of its description. `tools <name>` shows the whole description and its arguments, with their types, which are required, and the values they take. Add `--json` for the tools as the server lists them, input schemas included.
 
-`metrics query` is the generic form the others are presets of: filter on any of namespace, service, target, and operation, group by any subset of them with `--group-by`, rank with `--sort` and `--direction` (add `--min-count` for rate sorts), and attach series with `--series` (JSON output).
+`call` runs a tool. Pass arguments as `key=value`: a value that parses as JSON (`42`, `true`, `[789]`) is sent as JSON, and anything else as a string.
 
-Series use minute buckets for 1h and 6h windows, hour buckets for 24h to 168h, and day buckets for 672h. In JSON every series is `{count, sum, error_count}` arrays aligned to the response's `buckets` list; per-bucket averages are `sum / count`.
+```sh
+flare-cli call list_environments project_id=456
+flare-cli call get_environment_overviews environment_ids='[789]' hours=24
+flare-cli call query_metrics environment_id=789 namespace=web group_by='["target"]' sort=avg limit=10
+```
 
-Add `--json` to any data command for stable machine-readable output.
+For many arguments, pass a JSON object with `--json-args`, or `--json-args -` to read it from stdin. `key=value` pairs replace its keys.
+
+```sh
+echo '{"environment_id":789,"namespace":"job","group_by":["target"],"sort":"error_rate","min_count":10}' | flare-cli call query_metrics --json-args -
+```
+
+`call` prints the tool's text, with JSON indented. `--json` prints the tool's structured content, or its content list when it has none. When a tool fails, `call` prints its message on stderr and exits non-zero.
+
+`call` replaces the old `org`, `project`, `environment` and `metrics` commands: `org list` is `call list_organizations`, `metrics overview` is `call get_environment_overviews`, `metrics query` is `call query_metrics`, and so on. List tools return one page at a time; pass the response's `next` cursor back as `cursor=...` for the next one.
 
 ## MCP
 
