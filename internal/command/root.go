@@ -308,3 +308,15 @@ func printable(text string) string {
 		return char
 	}, text)
 }
+
+// withoutControls is printable for multi-line text: it keeps newlines and
+// tabs, so text from the server can't send escape sequences or invisible
+// formatting to the terminal but keeps its lines.
+func withoutControls(text string) string {
+	return strings.Map(func(char rune) rune {
+		if !unicode.IsGraphic(char) && char != '\n' && char != '\t' {
+			return -1
+		}
+		return char
+	}, text)
+}

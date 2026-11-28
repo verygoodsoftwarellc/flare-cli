@@ -8,7 +8,6 @@ import (
 	"io"
 	"slices"
 	"strings"
-	"unicode"
 
 	"github.com/spf13/cobra"
 )
@@ -184,17 +183,6 @@ func toolText(result toolResult) string {
 		}
 	}
 	return text.String()
-}
-
-// withoutControls drops control characters other than newlines and tabs, so
-// text from the server can't send escape sequences to the terminal.
-func withoutControls(text string) string {
-	return strings.Map(func(char rune) rune {
-		if unicode.IsControl(char) && char != '\n' && char != '\t' {
-			return -1
-		}
-		return char
-	}, text)
 }
 
 func writeToolTable(output io.Writer, tools []json.RawMessage) error {

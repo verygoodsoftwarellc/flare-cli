@@ -67,7 +67,7 @@ func newRailsLikeFlare(t *testing.T) *railsLikeFlare {
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"environment_id":{"type":"integer"}},"required":["environment_id"]}`),
 	}, func(_ context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		record(request)
-		return text("Flare API returned 404: \x1b[2JEnvironment not found.", true), nil
+		return text("Flare API returned 404: \x1b[2J\u202eEnvironment not found.", true), nil
 	})
 	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server },
 		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
