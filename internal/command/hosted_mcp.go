@@ -58,12 +58,19 @@ type rpcEnvelope struct {
 }
 
 type rpcError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data"`
 }
 
+// Error is the message plus its data, where Flare puts the detail, as in
+// "Invalid params: Tool not found: nope".
 func (err *rpcError) Error() string {
-	return err.Message
+	message := err.Message
+	if len(err.Data) > 0 && string(err.Data) != "null" {
+		message += ": " + schemaValue(err.Data)
+	}
+	return withoutControls(message)
 }
 
 // isRequest is true for a message that expects an answer, as opposed to a

@@ -209,12 +209,24 @@ func writeToolTable(output io.Writer, tools []json.RawMessage) error {
 	return writeTable(output, []string{"NAME", "DESCRIPTION"}, rows)
 }
 
-// summary is a description's first sentence, or its first line when that's
-// shorter. Flare writes each description as one long line.
+// summary is a description's lead: its first line, up to the end of the
+// first sentence or a colon that starts a list of fields, outside any
+// parentheses. Flare writes each description as one long line, often
+// "Do this: field, field, ...".
 func summary(description string) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(description), "\n")
-	if sentence, _, found := strings.Cut(line, ". "); found {
-		return sentence + "."
+	depth := 0
+	for index, char := range line {
+		switch char {
+		case '(':
+			depth++
+		case ')':
+			depth = max(depth-1, 0)
+		case '.', ':':
+			if depth == 0 && strings.HasPrefix(line[index+1:], " ") {
+				return line[:index] + "."
+			}
+		}
 	}
 	return line
 }

@@ -178,6 +178,22 @@ func TestToolArgumentsFromJSONArgs(t *testing.T) {
 	}
 }
 
+func TestToolSummaryIsTheDescriptionsLead(t *testing.T) {
+	for description, want := range map[string]string{
+		"List Flare organizations the user can access.":                                 "List Flare organizations the user can access.",
+		"Get bulk summaries for up to 25 environments. Fields: count = requests":        "Get bulk summaries for up to 25 environments.",
+		"List traces, newest first: root_name, started_at. Then more.":                  "List traces, newest first.",
+		"Generic Flare metrics query; the other metrics tools are presets of it. More.": "Generic Flare metrics query; the other metrics tools are presets of it.",
+		"Get one rule and its traces (each with reason: slow or error). Then more.":     "Get one rule and its traces (each with reason: slow or error).",
+		"First line\nsecond line": "First line",
+		"":                        "",
+	} {
+		if got := summary(description); got != want {
+			t.Errorf("summary(%q) = %q, want %q", description, got, want)
+		}
+	}
+}
+
 func TestToolsListsEveryHostedTool(t *testing.T) {
 	fake := newRailsLikeFlare(t)
 	output, err := runToolCommand(t, fake, false, "", "tools")
@@ -285,6 +301,10 @@ func TestCallFailsWhenTheToolDoes(t *testing.T) {
 	_, err = runToolCommand(t, fake, false, "", "call", "list_nothing")
 	if err == nil || !strings.Contains(err.Error(), "list_nothing") {
 		t.Fatalf("a JSON-RPC error should fail with its message: %v", err)
+	}
+	railsError := &rpcError{Code: -32602, Message: "Invalid params", Data: json.RawMessage(`"Tool not found: \u001b[2Jnope"`)}
+	if railsError.Error() != "Invalid params: Tool not found: [2Jnope" {
+		t.Fatalf("want the message, then its data without control characters: %q", railsError.Error())
 	}
 
 	_, err = runToolCommand(t, fake, false, "", "call", "list_organizations", "oops")
