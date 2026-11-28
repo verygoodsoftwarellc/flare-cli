@@ -365,7 +365,7 @@ func TestToolsKeepsAToolWhoseSchemaDoesNotDecode(t *testing.T) {
 func TestHostedMCPPrintsRateLimitsWhenVerbose(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("RateLimit", "limit=600, remaining=599, reset=60")
-		writer.Header().Set("X-Request-ID", "req-1")
+		writer.Header().Set("X-Request-ID", "req-1\u202e")
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}`))
 	}))
@@ -378,5 +378,14 @@ func TestHostedMCPPrintsRateLimitsWhenVerbose(t *testing.T) {
 	}
 	if !strings.Contains(verbose.String(), "rate-limit: limit=600, remaining=599, reset=60 policy= request=req-1\n") {
 		t.Fatalf("want the rate limit and request id: %q", verbose.String())
+	}
+}
+
+func TestToolTextKeepsJSONValidWithATrailingCRLF(t *testing.T) {
+	result := toolResult{Content: []json.RawMessage{json.RawMessage(`{"type":"text","text":"{\"ok\":true}\r\n"}`)}}
+	output := toolText(result)
+	var decoded map[string]bool
+	if err := json.Unmarshal([]byte(output), &decoded); err != nil || !decoded["ok"] {
+		t.Fatalf("want valid JSON after a trailing CRLF: %v %q", err, output)
 	}
 }

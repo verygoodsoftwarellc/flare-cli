@@ -273,7 +273,7 @@ func (hosted *hostedMCP) send(ctx context.Context, message []byte, receive func(
 	}
 	defer response.Body.Close()
 	if hosted.verbose && hosted.errWriter != nil {
-		fmt.Fprintf(hosted.errWriter, "rate-limit: %s policy=%s request=%s\n", response.Header.Get("RateLimit"), response.Header.Get("RateLimit-Policy"), response.Header.Get("X-Request-ID"))
+		fmt.Fprintf(hosted.errWriter, "rate-limit: %s policy=%s request=%s\n", printable(response.Header.Get("RateLimit")), printable(response.Header.Get("RateLimit-Policy")), printable(response.Header.Get("X-Request-ID")))
 	}
 	if sessionID := response.Header.Get("Mcp-Session-Id"); sessionID != "" {
 		hosted.mutex.Lock()

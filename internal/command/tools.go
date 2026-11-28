@@ -191,7 +191,9 @@ func toolText(result toolResult) string {
 		piece := withoutControls(content.Text)
 		var indented bytes.Buffer
 		if json.Indent(&indented, []byte(content.Text), "", "  ") == nil {
-			piece = escapeInvisible(indented.String())
+			// Indent keeps the text's leading and trailing whitespace, such as
+			// a CRLF, which would otherwise be escaped outside the JSON.
+			piece = escapeInvisible(strings.TrimSpace(indented.String()))
 		}
 		text.WriteString(piece)
 		if !strings.HasSuffix(piece, "\n") {
